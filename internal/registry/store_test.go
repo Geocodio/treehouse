@@ -303,6 +303,48 @@ func TestStore_Release(t *testing.T) {
 	}
 }
 
+func TestStore_ClaimDoesNotTouchLastGCAt(t *testing.T) {
+	store := newTestStore(t)
+
+	if _, err := store.Claim(ClaimRequest{
+		Project: "myapp", Instance: "feature-a", Repository: "/repo", Worktree: existingWorktree(t), BlockSize: 32,
+	}); err != nil {
+		t.Fatalf("Claim() returned unexpected error: %v", err)
+	}
+
+	lastGCAt, err := store.LastGCAt()
+	if err != nil {
+		t.Fatalf("LastGCAt() returned unexpected error: %v", err)
+	}
+	if lastGCAt != nil {
+		t.Errorf("LastGCAt() = %v after a claim with no prior gc, want nil (a claim must not suppress opportunistic gc)", lastGCAt)
+	}
+
+	// A second claim, made after gc has genuinely run once, must not push
+	// last_gc_at forward either.
+	if _, err := store.GC(); err != nil {
+		t.Fatalf("GC() returned unexpected error: %v", err)
+	}
+	afterGC, err := store.LastGCAt()
+	if err != nil {
+		t.Fatalf("LastGCAt() returned unexpected error: %v", err)
+	}
+
+	if _, err := store.Claim(ClaimRequest{
+		Project: "myapp", Instance: "feature-b", Repository: "/repo", Worktree: existingWorktree(t), BlockSize: 32,
+	}); err != nil {
+		t.Fatalf("second Claim() returned unexpected error: %v", err)
+	}
+
+	afterClaim, err := store.LastGCAt()
+	if err != nil {
+		t.Fatalf("LastGCAt() returned unexpected error: %v", err)
+	}
+	if !afterClaim.Equal(*afterGC) {
+		t.Errorf("LastGCAt() changed from %v to %v after a claim; only a real GC run may update it", afterGC, afterClaim)
+	}
+}
+
 func TestNeedsGC(t *testing.T) {
 	now := time.Now()
 

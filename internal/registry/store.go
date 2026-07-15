@@ -128,7 +128,6 @@ func (store *Store) Claim(request ClaimRequest) (*ClaimResult, error) {
 			return ErrPoolExhausted
 		}
 
-		now := time.Now().UTC()
 		claim := Claim{
 			Project:    request.Project,
 			Instance:   request.Instance,
@@ -136,11 +135,18 @@ func (store *Store) Claim(request ClaimRequest) (*ClaimResult, error) {
 			Worktree:   request.Worktree,
 			BlockStart: blockStart,
 			BlockSize:  request.BlockSize,
-			CreatedAt:  now,
+			CreatedAt:  time.Now().UTC(),
 		}
 
+		// Deliberately does not touch registry.LastGCAt: a claim runs a
+		// stale-claim sweep as a side effect of allocation (see
+		// gcStaleClaims above), but that is not a real GC pass — only
+		// Store.GC's own run (the standalone `gc` command, or the
+		// opportunistic pass create/list trigger) should reset the
+		// opportunistic-gc rate limit. Otherwise every `create` would
+		// silently suppress the next hour's opportunistic gc even though
+		// no gc actually ran.
 		registry.Claims = append(registry.Claims, claim)
-		registry.LastGCAt = &now
 
 		if err := store.save(registry); err != nil {
 			return err

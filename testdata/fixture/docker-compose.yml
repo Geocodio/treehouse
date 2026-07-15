@@ -5,10 +5,8 @@ services:
       - "${HTTP_PORT:-8080}:80"
     volumes:
       - ./web:/usr/share/nginx/html:ro
-    container_name: fixture-web
 
   cache:
     image: redis:alpine
     ports:
       - "${CACHE_PORT:-6379}:6379"
-    container_name: fixture-cache

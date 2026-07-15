@@ -1,0 +1,17 @@
+# Go
+*.o
+*.a
+*.so
+_obj/
+_test/
+*.out
+*.test
+vendor/
+
+# Build artifacts
+/treehouse
+/dist/
+
+# Editors and OS
+.idea/
+.DS_Store

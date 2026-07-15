@@ -1,0 +1,31 @@
+version: 2
+
+project_name: treehouse
+
+builds:
+  - id: treehouse
+    main: ./cmd/treehouse
+    binary: treehouse
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - darwin
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w -X main.version={{ .Version }}
+
+archives:
+  - id: treehouse
+    ids: [treehouse]
+    formats: [tar.gz]
+    name_template: >-
+      {{ .ProjectName }}_{{ .Os }}_{{ .Arch }}
+
+checksum:
+  name_template: checksums.txt
+
+changelog:
+  sort: asc

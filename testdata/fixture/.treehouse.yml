@@ -1,0 +1,15 @@
+version: 1
+project: fixture
+
+ports:
+  block_size: 32
+  env:
+    HTTP_PORT: 0
+    CACHE_PORT: 1
+
+provision:
+  hook: scripts/treehouse-post-create.sh
+
+urls:
+  - name: Web
+    url: "http://localhost:{HTTP_PORT}"

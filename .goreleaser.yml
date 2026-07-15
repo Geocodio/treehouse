@@ -30,18 +30,18 @@ checksum:
 changelog:
   sort: asc
 
-# TODO: uncomment once github.com/geocodio/homebrew-tap exists and is
-# published. Until then, releasing with this section active would fail:
-# goreleaser would try to push a formula update to a repository nobody has
-# created yet. See .github/workflows/release.yml for the workflow that
-# runs this config on every "v*" tag push.
-# brews:
-#   - name: treehouse
-#     ids: [treehouse]
-#     repository:
-#       owner: geocodio
-#       name: homebrew-tap
-#     directory: Formula
-#     homepage: "https://github.com/geocodio/treehouse"
-#     description: "Isolated docker-compose stacks per git worktree"
-#     license: "MIT"
+# Pushing the formula needs write access to homebrew-tap, which the
+# workflow's default GITHUB_TOKEN does not have — hence the dedicated
+# HOMEBREW_TAP_GITHUB_TOKEN secret (fine-grained PAT, contents:write on
+# homebrew-tap only). See .github/workflows/release.yml.
+brews:
+  - name: treehouse
+    ids: [treehouse]
+    repository:
+      owner: geocodio
+      name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+    directory: Formula
+    homepage: "https://github.com/geocodio/treehouse"
+    description: "Isolated docker-compose stacks per git worktree"
+    license: "MIT"

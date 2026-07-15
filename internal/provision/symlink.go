@@ -11,10 +11,24 @@ import (
 // already a symlink; refuse (error) if a non-empty real directory sits
 // there instead — that would silently discard instance-local content the
 // developer may not have meant to share.
+//
+// Unlike copyEntry/copyFiles, a missing source is a hard failure here, not
+// a warn-and-skip: symlink is for genuinely shared data (seed data, shared
+// uploads) the instance itself never generates, so a missing source means
+// that data plainly doesn't exist anywhere — a real misconfiguration, not
+// a routine "not built yet" state. Left unchecked, os.Symlink would happily
+// create a dangling symlink and fail silently at first use instead.
 func symlinkEntries(mainRepository, instancePath string, entries []string) error {
 	for _, relativePath := range entries {
 		target := filepath.Join(mainRepository, relativePath)
 		link := filepath.Join(instancePath, relativePath)
+
+		if _, err := os.Stat(target); err != nil {
+			if os.IsNotExist(err) {
+				return fmt.Errorf("provision.symlink %s: source %s does not exist in the main repository", relativePath, target)
+			}
+			return fmt.Errorf("provision.symlink %s: %w", relativePath, err)
+		}
 
 		if err := os.MkdirAll(filepath.Dir(link), 0o755); err != nil {
 			return fmt.Errorf("provision.symlink %s: %w", relativePath, err)

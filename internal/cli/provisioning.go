@@ -24,8 +24,8 @@ import (
 // materializeDeps runs provision.MaterializeDependencies and advances inst
 // to StateDepsCloned, saving the env file so the transition and the
 // dependency clone land together.
-func materializeDeps(inst *instance.Instance, manifestConfig *manifest.Manifest) error {
-	if err := provision.MaterializeDependencies(inst, manifestConfig); err != nil {
+func materializeDeps(cmd *cobra.Command, inst *instance.Instance, manifestConfig *manifest.Manifest) error {
+	if err := provision.MaterializeDependencies(inst, manifestConfig, cmd.ErrOrStderr()); err != nil {
 		return NewExitError(ExitGenericFailure, err)
 	}
 

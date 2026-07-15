@@ -9,8 +9,15 @@ describes the file formats themselves.
 ## `.treehouse.yml`
 
 Lives at the adopting repository's root and is committed to version
-control — every instance shares the same manifest as the main checkout,
-since it's read from the branch's own worktree.
+control. It is always read from **the invoking checkout's own worktree
+root**, never from the repository's main worktree — so a branch's own copy
+of `.treehouse.yml` is what governs commands run from that branch's
+worktree, even while the main checkout is on a different branch that
+hasn't merged the manifest yet (the ordinary state of a repository
+mid-adoption). See [`DESIGN.md`](DESIGN.md)'s "Manifest resolution" note
+for the full rule, including what stays anchored to the main repository
+instead (instance discovery, and `provision`'s symlink/copy/copy_files
+sources).
 
 ```yaml
 version: 1
@@ -115,7 +122,11 @@ mutable dependencies, then small config files, then anything scripted).
   If the destination is already a symlink, it's replaced; if it's an
   empty real directory, that directory is removed first; a *non-empty*
   real directory refuses with an error rather than silently discarding its
-  contents.
+  contents. A source that doesn't exist anywhere in the main repository is
+  always a hard failure (never a warning): unlike `copy`/`copy_files`
+  below, `symlink` is for data an instance never generates on its own, so
+  a missing source is a real misconfiguration, not a routine "not built
+  yet" state.
 - **`copy`**: a list of paths to copy-on-write clone into the instance —
   each instance gets its own independent, mutable copy, cheaply (see
   [`ports.md`](ports.md)'s sibling section in `DESIGN.md` on the
@@ -140,11 +151,26 @@ mutable dependencies, then small config files, then anything scripted).
   Copying is idempotent: an existing destination directory is left alone,
   so re-running provisioning (`provision --retry`) never clobbers a
   directory that was already cloned.
+
+  A source that doesn't exist anywhere in the main repository (a generated
+  build-artifact directory nobody has built there yet — `vendor/`,
+  `node_modules/`, `public/build`) is a warning, not a failure: that one
+  entry is skipped ("skipping vendor: not present in main repository") and
+  `create`/`provision` continues. If that entry also declares `reconcile`,
+  its `reconcile.command` still runs — immediately and unconditionally,
+  since with no directory cloned at all there's no lockfile hash yet for
+  the usual drift check to compare against; only once that first run
+  completes does the lockfile's hash get recorded, so later
+  `provision`/`provision --retry` calls go back to the ordinary
+  drift-only behavior.
 - **`copy_files`**: a list of individual files (not directories) plainly
   copied — never CoW-cloned, since these are expected to be small
   (`.env.docker`, per-instance override files). Also idempotent: an
   existing destination file is left untouched, so a developer's local
-  edits to a previously copied file survive `provision --retry`.
+  edits to a previously copied file survive `provision --retry`. Like
+  `copy`, a missing source is a warning and a skip, never a failure — and
+  since `copy_files` has no `reconcile` concept, there's nothing further
+  to force.
 - **`hook`**: a path (relative to the repository root) to a script run
   once the compose stack is up, with the instance's full `.treehouse.env`
   contents exported into its environment plus `TREEHOUSE_INSTANCE_PATH`.

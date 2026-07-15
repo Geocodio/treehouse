@@ -142,10 +142,19 @@ func runFreshCreate(
 		fmt.Fprintln(cmd.ErrOrStderr(), "warning:", warning)
 	}
 
-	if err := ensureBranch(repo.MainRepository, branch); err != nil {
+	// repo.CheckoutRoot, not repo.MainRepository: a brand new branch with
+	// no start point takes its tip from whichever worktree `git branch`
+	// runs in, so basing it on the main worktree would silently branch off
+	// whatever the main checkout happens to be on instead of the branch
+	// the user actually invoked `create` from.
+	if err := ensureBranch(repo.CheckoutRoot, branch); err != nil {
 		return NewExitError(ExitGenericFailure, err)
 	}
 
+	// `git worktree add` itself is repository-global (every worktree
+	// shares one .git), so which worktree runs it doesn't affect the
+	// result; repo.MainRepository is used here only because it's already
+	// resolved and any worktree would do.
 	if err := gitx.WorktreeAdd(repo.MainRepository, instancePath, branch, false); err != nil {
 		return NewExitError(ExitGenericFailure, err)
 	}
@@ -172,7 +181,7 @@ func runFreshCreate(
 	// deps-cloned and skips the hook entirely; `treehouse provision`
 	// completes it later.
 	if !noProvision {
-		if err := materializeDeps(&inst, repo.Manifest); err != nil {
+		if err := materializeDeps(cmd, &inst, repo.Manifest); err != nil {
 			return err
 		}
 	}
@@ -218,9 +227,14 @@ func resolveCreateName(cmd *cobra.Command, existingInstances []instance.Instance
 
 // ensureBranch creates branch if it doesn't already exist locally, per
 // create's "Branch doesn't exist locally: create it from the current
-// branch (tracking branch if it exists on origin)" rule.
-func ensureBranch(mainRepository, branch string) error {
-	exists, err := gitx.BranchExistsLocal(mainRepository, branch)
+// branch (tracking branch if it exists on origin)" rule. checkoutRoot must
+// be the invoking checkout's own worktree root: gitx.CreateBranch bases a
+// brand new branch on whatever HEAD checkoutRoot has checked out, so this
+// is what makes "the current branch" mean the branch the user actually ran
+// `create` from, not whatever the repository's main worktree happens to be
+// on.
+func ensureBranch(checkoutRoot, branch string) error {
+	exists, err := gitx.BranchExistsLocal(checkoutRoot, branch)
 	if err != nil {
 		return err
 	}
@@ -228,7 +242,7 @@ func ensureBranch(mainRepository, branch string) error {
 		return nil
 	}
 
-	return gitx.CreateBranch(mainRepository, branch)
+	return gitx.CreateBranch(checkoutRoot, branch)
 }
 
 func printCreateResult(cmd *cobra.Command, manifestConfig *manifest.Manifest, inst *instance.Instance, existing, jsonOutput bool) error {

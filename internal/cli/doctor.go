@@ -78,18 +78,32 @@ func runDoctor(cmd *cobra.Command) error {
 	return nil
 }
 
-// doctorCheckManifest resolves the main repository and validates its
-// manifest, returning both so later checks (compose contract, instances)
-// can reuse them without re-deriving them. Either return value is empty
-// when that step itself failed — callers skip the checks that depend on it.
+// doctorCheckManifest resolves this checkout's own root and its
+// repository's main worktree, then validates the manifest read from the
+// checkout root, returning the main repository path so later checks
+// (instances) can reuse it without re-deriving it. Either return value is
+// empty when that step itself failed — callers skip the checks that depend
+// on it.
+//
+// The manifest (and the docker-compose.yml checked by
+// doctorCheckComposeContract) are read from the checkout root, not the
+// main repository, for the same reason loadRepositoryContext is: a branch
+// that adds .treehouse.yml in a secondary worktree must be diagnosable
+// from that worktree even when the main checkout doesn't have the file.
 func doctorCheckManifest(cwd string, checks *[]doctorCheck) (mainRepository, composePath string) {
+	checkoutRoot, err := gitx.WorktreeRoot(cwd)
+	if err != nil {
+		*checks = append(*checks, doctorCheck{"git repository", checkFail, err.Error()})
+		return "", ""
+	}
+
 	mainRepo, err := gitx.FindMainRepository(cwd)
 	if err != nil {
 		*checks = append(*checks, doctorCheck{"git repository", checkFail, err.Error()})
 		return "", ""
 	}
 
-	manifestPath := filepath.Join(mainRepo, manifestFileName)
+	manifestPath := filepath.Join(checkoutRoot, manifestFileName)
 	if _, statErr := os.Stat(manifestPath); statErr != nil {
 		*checks = append(*checks, doctorCheck{"manifest", checkFail, fmt.Sprintf("%s not found", manifestPath)})
 		return mainRepo, ""
@@ -111,7 +125,7 @@ func doctorCheckManifest(cwd string, checks *[]doctorCheck) (mainRepository, com
 		*checks = append(*checks, doctorCheck{"manifest", checkPass, ""})
 	}
 
-	composeCandidate := filepath.Join(mainRepo, "docker-compose.yml")
+	composeCandidate := filepath.Join(checkoutRoot, "docker-compose.yml")
 	if _, statErr := os.Stat(composeCandidate); statErr == nil {
 		composePath = composeCandidate
 	}

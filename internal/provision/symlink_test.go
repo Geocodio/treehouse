@@ -102,6 +102,25 @@ func TestSymlinkEntries_RefusesNonEmptyRealDirectory(t *testing.T) {
 	}
 }
 
+// TestSymlinkEntries_FailsOnMissingSource guards BUG 2's fix in the other
+// direction from copy/copy_files: a provision.symlink source that doesn't
+// exist in the main repository is a real misconfiguration (there is no
+// data anywhere for the instance to share), so it must fail outright
+// rather than silently creating a dangling symlink.
+func TestSymlinkEntries_FailsOnMissingSource(t *testing.T) {
+	mainRepository := t.TempDir()
+	instancePath := t.TempDir()
+
+	err := symlinkEntries(mainRepository, instancePath, []string{"data/shared"})
+	if err == nil {
+		t.Fatalf("symlinkEntries() succeeded for a missing source, want a failure")
+	}
+
+	if _, statErr := os.Lstat(filepath.Join(instancePath, "data", "shared")); !os.IsNotExist(statErr) {
+		t.Errorf("symlinkEntries() created a dangling symlink for a missing source")
+	}
+}
+
 func TestSymlinkEntries_ReplacesEmptyRealDirectory(t *testing.T) {
 	mainRepository := t.TempDir()
 	instancePath := t.TempDir()

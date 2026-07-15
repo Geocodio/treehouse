@@ -52,6 +52,39 @@ document the why, never the what.
 | Machine config | `${XDG_CONFIG_HOME:-~/.config}/treehouse/config.yml` | machine-local |
 | Instances home | `~/treehouses/<project>/<instance>/` (default; overridable in machine config and per-manifest) | n/a |
 
+### Manifest resolution
+
+`.treehouse.yml` is always read from **the invoking checkout's own root**
+(`git rev-parse --show-toplevel` at cwd) — never from the repository's main
+worktree. This matters because a repository mid-adoption routinely has the
+manifest on some branches and not others: a feature branch that adds
+`.treehouse.yml`, checked out into a `git worktree add` worktree, must work
+from that worktree even while the main checkout sits on a branch (e.g.
+`main`) that hasn't merged the manifest yet. Every command that resolves a
+whole-repository context (`create`, `list`, `path`, `remove`, `switch`,
+`doctor`) reads the manifest this way; once inside an already-created
+instance, `up`/`provision` read it from that instance's own worktree root
+(which is exactly its `.treehouse.env`'s directory) for the same reason.
+
+This is deliberately independent of **the repository's main worktree**
+(`git worktree list --porcelain`'s first entry), which remains the anchor
+for two unrelated things:
+- **instance discovery** — `Discover` walks every worktree starting from
+  the main repository, listing every instance regardless of which
+  worktree you invoke `list`/`switch`/`remove`/`path` from;
+- **provisioning sources** — `provision.symlink`/`copy`/`copy_files`
+  entries and `TREEHOUSE_MAIN_REPOSITORY` always mean the main
+  repository's copy, since that's the one canonical, always-present
+  source every instance clones from or symlinks to (see "Copy-on-write
+  strategy" below).
+
+`create` bases a brand new branch (when it doesn't already exist locally)
+on the invoking checkout's own current branch, not the main repository's —
+`git branch <name>` with no start point takes the tip of whichever
+worktree it runs in, so this must run in the invoking checkout for "create
+it from the current branch" to mean what a user invoking `create` from a
+non-main worktree would expect.
+
 ## Manifest schema (version 1)
 
 ```yaml
@@ -267,6 +300,33 @@ Behavioral rules:
 - After cloning a `copy` entry with `reconcile`, record the sha256 of the main repo's
   lockfile in `.treehouse.env`. Provisioning compares the instance's lockfile against
   the recorded hash and runs `reconcile.command` inside the instance only on mismatch.
+
+### A missing source: warn-and-skip vs. fail
+
+`provision.copy`/`provision.copy_files` and `provision.symlink` disagree on purpose
+about what a missing source means:
+
+- **`copy`/`copy_files`**: a source that doesn't exist anywhere in the main
+  repository is a warning ("skipping vendor: not present in main repository"),
+  and that one entry is skipped — it never fails the whole `create`/`provision`
+  run. These paths are routinely generated build artifacts (`vendor/`,
+  `node_modules/`, `public/build`) that a real adoption dry-run may hit before
+  the main repository has ever built them locally; that's an ordinary, expected
+  state, not a broken manifest.
+- **`symlink`**: a missing source is always a hard failure. `symlink` entries
+  are for genuinely shared data an instance never generates on its own (seed
+  data, shared uploads) — if it isn't in the main repository, it doesn't exist
+  anywhere, which is a real misconfiguration worth stopping the run over rather
+  than silently creating a dangling symlink.
+
+A skipped `copy` entry that also declares `reconcile` runs `reconcile.command`
+immediately and unconditionally, rather than recording a lockfile hash and
+waiting for a future mismatch to trigger it: with no directory cloned at all,
+there is nothing for the usual hash comparison to compare against, so a normal
+drift check would never fire and the instance would be left with the directory
+permanently missing. Only once that first run completes is the lockfile's hash
+recorded, so subsequent `provision`/`provision --retry` calls fall back to the
+ordinary drift-only behavior described above.
 
 ## Recommended repo integration (documented, not enforced)
 

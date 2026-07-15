@@ -1,8 +1,10 @@
 package provision
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/geocodio/treehouse/internal/manifest"
@@ -20,8 +22,16 @@ func TestCopyEntry_ClonesDirectoryContents(t *testing.T) {
 		t.Fatalf("writing file: %v", err)
 	}
 
-	if err := copyEntry(mainRepository, instancePath, manifest.CopyEntry{Path: "vendor"}); err != nil {
+	var warnings bytes.Buffer
+	skipped, err := copyEntry(mainRepository, instancePath, manifest.CopyEntry{Path: "vendor"}, &warnings)
+	if err != nil {
 		t.Fatalf("copyEntry() returned unexpected error: %v", err)
+	}
+	if skipped {
+		t.Errorf("copyEntry() skipped = true for a source that exists, want false")
+	}
+	if warnings.Len() != 0 {
+		t.Errorf("copyEntry() wrote a warning for a source that exists: %q", warnings.String())
 	}
 
 	copied := filepath.Join(instancePath, "vendor", "pkg", "file.txt")
@@ -56,7 +66,7 @@ func TestCopyEntry_IsIdempotent(t *testing.T) {
 		t.Fatalf("writing file: %v", err)
 	}
 
-	if err := copyEntry(mainRepository, instancePath, manifest.CopyEntry{Path: "vendor"}); err != nil {
+	if _, err := copyEntry(mainRepository, instancePath, manifest.CopyEntry{Path: "vendor"}, &bytes.Buffer{}); err != nil {
 		t.Fatalf("first copyEntry() returned unexpected error: %v", err)
 	}
 
@@ -67,12 +77,37 @@ func TestCopyEntry_IsIdempotent(t *testing.T) {
 		t.Fatalf("writing local edit: %v", err)
 	}
 
-	if err := copyEntry(mainRepository, instancePath, manifest.CopyEntry{Path: "vendor"}); err != nil {
+	if _, err := copyEntry(mainRepository, instancePath, manifest.CopyEntry{Path: "vendor"}, &bytes.Buffer{}); err != nil {
 		t.Fatalf("second copyEntry() returned unexpected error: %v", err)
 	}
 
 	if _, err := os.Stat(localFile); err != nil {
 		t.Errorf("local edit was clobbered by a repeat copyEntry(): %v", err)
+	}
+}
+
+// TestCopyEntry_SkipsMissingSourceWithWarning guards BUG 2's fix: a
+// provision.copy source that simply doesn't exist in the main repository
+// (a generated build-artifact directory nobody has built there yet) must
+// warn and skip, never fail the whole create/provision run.
+func TestCopyEntry_SkipsMissingSourceWithWarning(t *testing.T) {
+	mainRepository := t.TempDir()
+	instancePath := t.TempDir()
+
+	var warnings bytes.Buffer
+	skipped, err := copyEntry(mainRepository, instancePath, manifest.CopyEntry{Path: "vendor"}, &warnings)
+	if err != nil {
+		t.Fatalf("copyEntry() returned unexpected error for a missing source, want a warning instead: %v", err)
+	}
+	if !skipped {
+		t.Errorf("copyEntry() skipped = false for a missing source, want true")
+	}
+	if !strings.Contains(warnings.String(), "vendor") || !strings.Contains(warnings.String(), "not present in main repository") {
+		t.Errorf("warnings = %q, want it to mention vendor and the main repository", warnings.String())
+	}
+
+	if _, statErr := os.Stat(filepath.Join(instancePath, "vendor")); !os.IsNotExist(statErr) {
+		t.Errorf("copyEntry() created a destination for a missing source")
 	}
 }
 
@@ -84,7 +119,7 @@ func TestCopyFiles_CopiesPlainFiles(t *testing.T) {
 		t.Fatalf("writing .env.docker: %v", err)
 	}
 
-	if err := copyFiles(mainRepository, instancePath, []string{".env.docker"}); err != nil {
+	if err := copyFiles(mainRepository, instancePath, []string{".env.docker"}, &bytes.Buffer{}); err != nil {
 		t.Fatalf("copyFiles() returned unexpected error: %v", err)
 	}
 
@@ -108,7 +143,7 @@ func TestCopyFiles_DoesNotOverwriteExistingDestination(t *testing.T) {
 		t.Fatalf("writing local .env.docker: %v", err)
 	}
 
-	if err := copyFiles(mainRepository, instancePath, []string{".env.docker"}); err != nil {
+	if err := copyFiles(mainRepository, instancePath, []string{".env.docker"}, &bytes.Buffer{}); err != nil {
 		t.Fatalf("copyFiles() returned unexpected error: %v", err)
 	}
 
@@ -118,5 +153,26 @@ func TestCopyFiles_DoesNotOverwriteExistingDestination(t *testing.T) {
 	}
 	if string(contents) != "local edit\n" {
 		t.Errorf("contents = %q, want local edit preserved", contents)
+	}
+}
+
+// TestCopyFiles_SkipsMissingSourceWithWarning mirrors
+// TestCopyEntry_SkipsMissingSourceWithWarning for copy_files: a missing
+// source file warns and is skipped rather than failing the run.
+func TestCopyFiles_SkipsMissingSourceWithWarning(t *testing.T) {
+	mainRepository := t.TempDir()
+	instancePath := t.TempDir()
+
+	var warnings bytes.Buffer
+	if err := copyFiles(mainRepository, instancePath, []string{".env.docker"}, &warnings); err != nil {
+		t.Fatalf("copyFiles() returned unexpected error for a missing source, want a warning instead: %v", err)
+	}
+
+	if !strings.Contains(warnings.String(), ".env.docker") || !strings.Contains(warnings.String(), "not present in main repository") {
+		t.Errorf("warnings = %q, want it to mention .env.docker and the main repository", warnings.String())
+	}
+
+	if _, statErr := os.Stat(filepath.Join(instancePath, ".env.docker")); !os.IsNotExist(statErr) {
+		t.Errorf("copyFiles() created a destination for a missing source")
 	}
 }

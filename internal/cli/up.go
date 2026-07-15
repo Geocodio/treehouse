@@ -47,7 +47,10 @@ func runUp(cmd *cobra.Command) error {
 		return nil
 	}
 
-	manifestConfig, err := loadManifestFor(inst.MainRepository)
+	// inst.Path (not inst.MainRepository) is this instance's own checkout
+	// root -- the manifest is read from wherever this instance's branch
+	// itself put it, per repo.go's CheckoutRoot resolution rule.
+	manifestConfig, err := loadManifestFor(inst.Path)
 	if err != nil {
 		return err
 	}

@@ -9,6 +9,7 @@ package provision
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 
@@ -21,27 +22,46 @@ import (
 // sha256 of the main repository's lockfile for every copy entry that has a
 // reconcile step. It does not itself change inst.State or save it — the
 // caller advances the state to StateDepsCloned and persists it, so the two
-// changes land in a single atomic env-file write.
-func MaterializeDependencies(inst *instance.Instance, manifestConfig *manifest.Manifest) error {
+// changes land in a single atomic env-file write. warnings receives one
+// line for every provision.copy/copy_files source that doesn't exist in the
+// main repository (see copyEntry/copyFiles); production callers pass the
+// command's own stderr.
+func MaterializeDependencies(inst *instance.Instance, manifestConfig *manifest.Manifest, warnings io.Writer) error {
 	if err := symlinkEntries(inst.MainRepository, inst.Path, manifestConfig.Provision.Symlink); err != nil {
 		return err
 	}
 
 	for _, entry := range manifestConfig.Provision.Copy {
-		if err := copyEntry(inst.MainRepository, inst.Path, entry); err != nil {
+		skipped, err := copyEntry(inst.MainRepository, inst.Path, entry, warnings)
+		if err != nil {
 			return err
 		}
 
-		if entry.Reconcile != nil {
-			hash, err := hashLockfile(inst.MainRepository, entry.Reconcile.Lockfile)
-			if err != nil {
-				return err
-			}
-			inst.LockHashes[entry.Reconcile.Lockfile] = hash
+		if entry.Reconcile == nil {
+			continue
 		}
+
+		if skipped {
+			// The copy was skipped, so there is no cloned directory for a
+			// lockfile-hash comparison to mean anything (DESIGN.md's
+			// drift check assumes a directory that already exists and
+			// might merely be stale) — the installer must run
+			// unconditionally here so the instance ends up with a real,
+			// working directory instead of silently staying empty until
+			// some later lockfile edit happens to trigger reconcile.
+			if err := runInDir(inst.Path, entry.Reconcile.Command); err != nil {
+				return fmt.Errorf("reconcile %s (source not present in main repository): %w", entry.Path, err)
+			}
+		}
+
+		hash, err := hashLockfile(inst.MainRepository, entry.Reconcile.Lockfile)
+		if err != nil {
+			return err
+		}
+		inst.LockHashes[entry.Reconcile.Lockfile] = hash
 	}
 
-	if err := copyFiles(inst.MainRepository, inst.Path, manifestConfig.Provision.CopyFiles); err != nil {
+	if err := copyFiles(inst.MainRepository, inst.Path, manifestConfig.Provision.CopyFiles, warnings); err != nil {
 		return err
 	}
 

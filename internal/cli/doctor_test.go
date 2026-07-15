@@ -104,6 +104,38 @@ services:
 	}
 }
 
+// TestDoctorCheckManifest_ReadsFromSecondaryWorktree guards BUG 1's fix in
+// `doctor` specifically (it resolves the manifest itself, independent of
+// loadRepositoryContext -- see repo_test.go for the equivalent create/list/
+// switch/remove/path coverage): a branch that adds .treehouse.yml, checked
+// out into a secondary worktree, must pass doctor's manifest check even
+// though the main checkout never touched the manifest.
+func TestDoctorCheckManifest_ReadsFromSecondaryWorktree(t *testing.T) {
+	main := initRepositoryWithoutManifest(t)
+
+	worktreePath := filepath.Join(t.TempDir(), "feature-add-manifest")
+	runGitCommand(t, main, "worktree", "add", "-b", "feature/add-manifest", worktreePath)
+
+	manifestContents := "version: 1\nproject: adopted\n"
+	if err := os.WriteFile(filepath.Join(worktreePath, manifestFileName), []byte(manifestContents), 0o644); err != nil {
+		t.Fatalf("writing manifest: %v", err)
+	}
+	runGitCommand(t, worktreePath, "add", manifestFileName)
+	runGitCommand(t, worktreePath, "commit", "-q", "-m", "add treehouse manifest")
+
+	var checks []doctorCheck
+	mainRepository, _ := doctorCheckManifest(worktreePath, &checks)
+
+	if check := findCheck(t, checks, "manifest"); check.Status != checkPass {
+		t.Errorf("manifest check status = %v, detail %q, want PASS", check.Status, check.Detail)
+	}
+
+	wantMainRepository := evalSymlinksOrFatal(t, main)
+	if gotMainRepository := evalSymlinksOrFatal(t, mainRepository); gotMainRepository != wantMainRepository {
+		t.Errorf("doctorCheckManifest() mainRepository = %q, want %q", gotMainRepository, wantMainRepository)
+	}
+}
+
 func TestDoctorCheckRegistry_FlagsStaleClaimAsWarning(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 

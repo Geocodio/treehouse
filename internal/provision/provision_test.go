@@ -1,8 +1,10 @@
 package provision
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/geocodio/treehouse/internal/instance"
@@ -79,7 +81,7 @@ func TestMaterializeDependencies_RecordsLockHashForReconcileEntries(t *testing.T
 		},
 	}
 
-	if err := MaterializeDependencies(inst, manifestConfig); err != nil {
+	if err := MaterializeDependencies(inst, manifestConfig, &bytes.Buffer{}); err != nil {
 		t.Fatalf("MaterializeDependencies() returned unexpected error: %v", err)
 	}
 
@@ -89,6 +91,59 @@ func TestMaterializeDependencies_RecordsLockHashForReconcileEntries(t *testing.T
 	}
 	if inst.LockHashes["composer.lock"] != wantHash {
 		t.Errorf("LockHashes[composer.lock] = %q, want %q", inst.LockHashes["composer.lock"], wantHash)
+	}
+}
+
+// TestMaterializeDependencies_RunsReconcileUnconditionallyWhenCopySkipped
+// guards BUG 2's second half: when a provision.copy entry's source doesn't
+// exist in the main repository (so copyEntry skips it with a warning, per
+// copy_test.go), an entry with a reconcile step must still end up with a
+// working directory — the installer runs unconditionally right away,
+// since there is no previously cloned directory for a lockfile-hash
+// comparison to mean anything.
+func TestMaterializeDependencies_RunsReconcileUnconditionallyWhenCopySkipped(t *testing.T) {
+	mainRepository := t.TempDir()
+	instancePath := t.TempDir()
+
+	// composer.lock exists in the main repository, but the vendor/
+	// directory itself does not -- e.g. a fresh clone of a branch that has
+	// never run `composer install` locally.
+	if err := os.WriteFile(filepath.Join(mainRepository, "composer.lock"), []byte("v1"), 0o644); err != nil {
+		t.Fatalf("writing lockfile: %v", err)
+	}
+
+	inst := newTestInstance(t, mainRepository, instancePath)
+	marker := filepath.Join(instancePath, "vendor", "installed")
+	manifestConfig := &manifest.Manifest{
+		Provision: manifest.ProvisionConfig{
+			Copy: []manifest.CopyEntry{
+				{Path: "vendor", Reconcile: &manifest.ReconcileConfig{
+					Lockfile: "composer.lock",
+					Command:  "mkdir -p vendor && touch vendor/installed",
+				}},
+			},
+		},
+	}
+
+	var warnings bytes.Buffer
+	if err := MaterializeDependencies(inst, manifestConfig, &warnings); err != nil {
+		t.Fatalf("MaterializeDependencies() returned unexpected error: %v", err)
+	}
+
+	if !strings.Contains(warnings.String(), "vendor") {
+		t.Errorf("warnings = %q, want it to mention the skipped vendor copy", warnings.String())
+	}
+
+	if _, err := os.Stat(marker); err != nil {
+		t.Fatalf("reconcile.command did not run unconditionally for a skipped copy: %v", err)
+	}
+
+	wantHash, err := hashLockfile(mainRepository, "composer.lock")
+	if err != nil {
+		t.Fatalf("hashLockfile(): %v", err)
+	}
+	if inst.LockHashes["composer.lock"] != wantHash {
+		t.Errorf("LockHashes[composer.lock] = %q, want %q (so a later Reconcile() only reruns on real drift)", inst.LockHashes["composer.lock"], wantHash)
 	}
 }
 

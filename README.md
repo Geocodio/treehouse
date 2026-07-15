@@ -18,7 +18,9 @@ treehouse-managed repository on the machine.
 **Homebrew** (macOS/Linux):
 
 ```
-brew install geocodio/tap/treehouse   # coming soon — no tap repository published yet
+brew tap geocodio/tap
+brew trust geocodio/tap   # newer Homebrew requires trusting third-party taps once
+brew install treehouse
 ```
 
 **`go install`:**

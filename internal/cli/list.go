@@ -13,19 +13,20 @@ import (
 )
 
 func newListCommand() *cobra.Command {
-	var jsonOutput, allRepos bool
+	var jsonOutput, allRepos, noGC bool
 
 	command := &cobra.Command{
 		Use:   "list",
 		Short: "List instances",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runList(cmd, jsonOutput, allRepos)
+			return runList(cmd, jsonOutput, allRepos, noGC)
 		},
 	}
 
 	command.Flags().BoolVar(&jsonOutput, "json", false, "emit a single JSON document on stdout")
 	command.Flags().BoolVar(&allRepos, "all-repos", false, "list instances across every treehouse-managed repository")
+	command.Flags().BoolVar(&noGC, "no-gc", false, "skip the opportunistic gc pass this command would otherwise trigger")
 
 	return command
 }
@@ -42,9 +43,19 @@ type listEntry struct {
 	Ports             map[string]int `json:"ports"`
 	State             instance.State `json:"state"`
 	RunningContainers int            `json:"running_containers"`
+
+	// Stale is true when this entry's registry claim points at a worktree
+	// that no longer exists on disk (removed outside of `treehouse
+	// remove`/`prune`), per DESIGN.md: list must flag an orphaned claim
+	// rather than silently reporting it with blank fields. Only
+	// --all-repos entries (sourced directly from the registry) can be
+	// stale; `treehouse gc` reaps them.
+	Stale bool `json:"stale"`
 }
 
-func runList(cmd *cobra.Command, jsonOutput, allRepos bool) error {
+func runList(cmd *cobra.Command, jsonOutput, allRepos, noGC bool) error {
+	maybeRunOpportunisticGC(cmd, noGC)
+
 	var entries []listEntry
 	var err error
 
@@ -113,6 +124,15 @@ func listAllRepos() ([]listEntry, error) {
 			BlockStart: claim.BlockStart,
 		}
 
+		if _, statErr := os.Stat(claim.Worktree); statErr != nil {
+			// The worktree is gone; there's no .treehouse.env left to read
+			// branch/ports/state from, so flag the claim as stale instead
+			// of reporting it with those fields silently blank.
+			entry.Stale = true
+			entries = append(entries, entry)
+			continue
+		}
+
 		envFilePath := filepath.Join(claim.Worktree, instance.EnvFileName)
 		if loaded, loadErr := instance.LoadEnvFile(envFilePath); loadErr == nil {
 			entry.Branch = loaded.Branch
@@ -159,6 +179,15 @@ func printListTable(cmd *cobra.Command, entries []listEntry) {
 	}
 
 	for _, entry := range entries {
+		if entry.Stale {
+			fmt.Fprintf(
+				cmd.OutOrStdout(),
+				"%s/%s\tstale (worktree missing)\t%s\n",
+				entry.Project, entry.Instance, entry.Path,
+			)
+			continue
+		}
+
 		fmt.Fprintf(
 			cmd.OutOrStdout(),
 			"%s/%s\tbranch=%s\tstate=%s\tcontainers=%d\t%s\n",

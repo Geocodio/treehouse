@@ -101,11 +101,23 @@ func New(params NewParams) Instance {
 }
 
 // PortsForBlock computes the absolute port for every manifest ports.env
-// entry given the instance's claimed blockStart.
-func PortsForBlock(blockStart int, envIndices map[string]int) map[string]int {
-	ports := make(map[string]int, len(envIndices))
+// entry given the instance's claimed blockStart, then applies ports.aliases:
+// every alias environment variable is set to the same absolute port as its
+// canonical variable, so both are written into .treehouse.env. An alias
+// whose canonical variable isn't present in envIndices is silently skipped
+// rather than added with a zero value — manifest validation already rejects
+// that case, so this only matters for callers (like tests) that build
+// PortsForBlock's arguments by hand.
+func PortsForBlock(blockStart int, envIndices map[string]int, aliases map[string]string) map[string]int {
+	ports := make(map[string]int, len(envIndices)+len(aliases))
 	for name, index := range envIndices {
 		ports[name] = blockStart + index
+	}
+
+	for alias, canonical := range aliases {
+		if port, ok := ports[canonical]; ok {
+			ports[alias] = port
+		}
 	}
 
 	return ports

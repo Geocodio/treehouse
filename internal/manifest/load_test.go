@@ -146,6 +146,30 @@ location: ~/treehouses
 	}
 }
 
+func TestLoad_PortsAliases(t *testing.T) {
+	path := writeManifest(t, `
+version: 1
+project: myapp
+ports:
+  env:
+    HTTP_PORT: 0
+  aliases:
+    WEB_PORT: HTTP_PORT
+`)
+
+	result, warnings, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() returned unexpected error: %v", err)
+	}
+	if len(warnings) != 0 {
+		t.Errorf("Load() returned unexpected warnings: %v", warnings)
+	}
+
+	if result.Ports.Aliases["WEB_PORT"] != "HTTP_PORT" {
+		t.Errorf("Ports.Aliases[WEB_PORT] = %q, want HTTP_PORT", result.Ports.Aliases["WEB_PORT"])
+	}
+}
+
 func TestLoad_ValidationErrors(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -227,6 +251,32 @@ ports:
     1PORT: 0
 `,
 			wantContain: "is not a valid environment variable name",
+		},
+		{
+			name: "alias canonical not defined in ports.env",
+			yaml: `
+version: 1
+project: myapp
+ports:
+  env:
+    HTTP_PORT: 0
+  aliases:
+    WEB_PORT: MISSING_PORT
+`,
+			wantContain: `ports.aliases.WEB_PORT: canonical variable "MISSING_PORT" is not defined in ports.env`,
+		},
+		{
+			name: "alias collides with ports.env key",
+			yaml: `
+version: 1
+project: myapp
+ports:
+  env:
+    HTTP_PORT: 0
+  aliases:
+    HTTP_PORT: HTTP_PORT
+`,
+			wantContain: "ports.aliases.HTTP_PORT: collides with ports.env.HTTP_PORT",
 		},
 		{
 			name: "symlink absolute path",

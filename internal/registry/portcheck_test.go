@@ -42,3 +42,26 @@ func TestParseLsofListeningPorts_IgnoresNonListenLines(t *testing.T) {
 		t.Errorf("parseLsofListeningPorts() = %v, want empty for a non-LISTEN line", ports)
 	}
 }
+
+func TestParseLsofProcesses(t *testing.T) {
+	output := []byte(`COMMAND   PID       USER   FD   TYPE             DEVICE SIZE/OFF NODE NAME
+node    12345 codemonkey   23u  IPv4 0x1111111111      0t0  TCP *:4640 (LISTEN)
+postgres 6789 codemonkey    7u  IPv4 0x2222222222      0t0  TCP 127.0.0.1:5432 (LISTEN)
+`)
+
+	processes := parseLsofProcesses(output)
+
+	if processes[4640] != "node" {
+		t.Errorf("processes[4640] = %q, want node", processes[4640])
+	}
+	if processes[5432] != "postgres" {
+		t.Errorf("processes[5432] = %q, want postgres", processes[5432])
+	}
+}
+
+func TestParseLsofProcesses_EmptyOutput(t *testing.T) {
+	processes := parseLsofProcesses([]byte(""))
+	if len(processes) != 0 {
+		t.Errorf("parseLsofProcesses(\"\") = %v, want empty", processes)
+	}
+}

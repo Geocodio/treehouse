@@ -168,3 +168,50 @@ func TestWorktreeRemove_RefusesDirtyWithoutForce(t *testing.T) {
 		t.Errorf("WorktreeRemove() with --force returned unexpected error: %v", err)
 	}
 }
+
+func TestGitDir_LinkedWorktreeResolvesToItsOwnGitDirUnderMain(t *testing.T) {
+	repo := initTestRepository(t)
+	runGit(t, repo, "branch", "feature-a")
+
+	worktreePath := filepath.Join(t.TempDir(), "feature-a")
+	if err := WorktreeAdd(repo, worktreePath, "feature-a", false); err != nil {
+		t.Fatalf("WorktreeAdd() returned unexpected error: %v", err)
+	}
+
+	gitDir, err := GitDir(worktreePath)
+	if err != nil {
+		t.Fatalf("GitDir() returned unexpected error: %v", err)
+	}
+
+	if _, err := os.Stat(gitDir); err != nil {
+		t.Fatalf("GitDir() = %q does not exist: %v", gitDir, err)
+	}
+	if filepath.Base(filepath.Dir(gitDir)) != "worktrees" {
+		t.Errorf("GitDir() = %q, want a path under a \"worktrees\" directory", gitDir)
+	}
+}
+
+func TestReflogHeadMTime_FindsRealReflogFile(t *testing.T) {
+	repo := initTestRepository(t)
+
+	mtime, ok, err := ReflogHeadMTime(repo)
+	if err != nil {
+		t.Fatalf("ReflogHeadMTime() returned unexpected error: %v", err)
+	}
+	if !ok {
+		t.Fatalf("ReflogHeadMTime() ok = false, want true for a repository with commits")
+	}
+	if mtime.IsZero() {
+		t.Errorf("ReflogHeadMTime() = zero time, want a real mtime")
+	}
+}
+
+func TestReflogHeadMTime_NonGitDirectoryReturnsError(t *testing.T) {
+	// GitDir shells out to `git rev-parse --git-dir`, which fails outright
+	// for a directory that isn't a git repository at all; callers (gc's
+	// idle detection) already treat this error the same as "signal
+	// unavailable", same as a missing reflog file.
+	if _, _, err := ReflogHeadMTime(t.TempDir()); err == nil {
+		t.Errorf("ReflogHeadMTime() returned nil error for a non-git directory, want an error")
+	}
+}

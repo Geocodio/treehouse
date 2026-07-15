@@ -7,8 +7,11 @@ package gitx
 import (
 	"bytes"
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
+	"time"
 )
 
 // run executes git with the given arguments inside dir and returns its
@@ -85,4 +88,40 @@ func IsDirty(worktreePath string) (bool, error) {
 // dir, whether dir is the main repository or a linked worktree.
 func WorktreeRoot(dir string) (string, error) {
 	return run(dir, "rev-parse", "--show-toplevel")
+}
+
+// GitDir resolves the actual git directory backing dir: for a linked
+// worktree this is the per-worktree directory under the main repository's
+// .git/worktrees/<name>, not dir's own ".git" (which, for a linked
+// worktree, is a file pointing at that real location, not a directory).
+func GitDir(dir string) (string, error) {
+	gitDir, err := run(dir, "rev-parse", "--git-dir")
+	if err != nil {
+		return "", err
+	}
+
+	if filepath.IsAbs(gitDir) {
+		return gitDir, nil
+	}
+
+	return filepath.Join(dir, gitDir), nil
+}
+
+// ReflogHeadMTime returns the modification time of worktreePath's own HEAD
+// reflog file, used by `gc`/`prune`'s idle-detection as one of the signals
+// for "when was this instance's worktree last actively used". A worktree
+// with no reflog yet (e.g. reflogs disabled) reports ok=false rather than an
+// error, since that's a normal, not exceptional, outcome.
+func ReflogHeadMTime(worktreePath string) (mtime time.Time, ok bool, err error) {
+	gitDir, err := GitDir(worktreePath)
+	if err != nil {
+		return time.Time{}, false, err
+	}
+
+	info, statErr := os.Stat(filepath.Join(gitDir, "logs", "HEAD"))
+	if statErr != nil {
+		return time.Time{}, false, nil
+	}
+
+	return info.ModTime(), true, nil
 }

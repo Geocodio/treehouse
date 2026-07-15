@@ -5,6 +5,8 @@ import (
 	"bytes"
 	"fmt"
 	"os/exec"
+	"regexp"
+	"strconv"
 	"strings"
 )
 
@@ -47,6 +49,44 @@ func RunningContainerCount(projectName string) (int, error) {
 	}
 
 	return len(containers), nil
+}
+
+// hostPublishedPortPattern matches a single published-port mapping inside
+// `docker ps`'s Ports column, e.g. "0.0.0.0:4640->80/tcp" or
+// "[::]:4640->80/tcp": the host port is the number immediately before "->".
+var hostPublishedPortPattern = regexp.MustCompile(`:(\d+)->`)
+
+// ProjectPublishedPorts returns the set of host ports currently published by
+// projectName's own running containers, via a single `docker ps` invocation.
+// `up`'s port re-verification uses this to exclude ports that belong to the
+// very stack it's about to bring up, rather than mistaking a partially-up
+// project's own listener for a squatting process — see DESIGN.md's "up
+// re-verifies" rule.
+func ProjectPublishedPorts(projectName string) (map[int]bool, error) {
+	output, err := exec.Command(
+		"docker", "ps",
+		"--filter", containerLabelPrefix+projectName,
+		"--format", "{{.Ports}}",
+	).Output()
+	if err != nil {
+		return nil, fmt.Errorf("running docker ps: %w", err)
+	}
+
+	return parsePublishedPorts(output), nil
+}
+
+func parsePublishedPorts(output []byte) map[int]bool {
+	ports := map[int]bool{}
+
+	for _, match := range hostPublishedPortPattern.FindAllSubmatch(output, -1) {
+		port, err := strconv.Atoi(string(match[1]))
+		if err != nil {
+			continue
+		}
+		ports[port] = true
+	}
+
+	return ports
 }
 
 func parseContainerLines(output []byte) []Container {

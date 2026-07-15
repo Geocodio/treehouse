@@ -23,11 +23,15 @@ type Manifest struct {
 }
 
 // PortsConfig is the manifest's ports section: the size of the block
-// reserved per instance and the mapping of environment variable name to the
-// port's index within that block.
+// reserved per instance, the mapping of environment variable name to the
+// port's index within that block, and any alias environment variables that
+// should be written to .treehouse.env with the same value as a canonical
+// ports.env variable (some apps read the same published port under several
+// env var names).
 type PortsConfig struct {
 	BlockSize int
 	Env       map[string]int
+	Aliases   map[string]string
 }
 
 // ProvisionConfig is the manifest's provision section, all of which is

@@ -5,7 +5,6 @@ import "github.com/spf13/cobra"
 // NewRootCommand builds the treehouse root cobra command, wiring version
 // information, exit-code mapping (see ExitCodeFor), and the instance
 // lifecycle commands documented in DESIGN.md's "Command behavior" section.
-// gc, prune, init, doctor, and switch are wave 3 and not registered here.
 func NewRootCommand(version string) *cobra.Command {
 	rootCommand := &cobra.Command{
 		Use:   "treehouse",
@@ -28,6 +27,11 @@ func NewRootCommand(version string) *cobra.Command {
 	rootCommand.AddCommand(newComposeCommand())
 	rootCommand.AddCommand(newExecCommand())
 	rootCommand.AddCommand(newProvisionCommand())
+	rootCommand.AddCommand(newGCCommand())
+	rootCommand.AddCommand(newPruneCommand())
+	rootCommand.AddCommand(newInitCommand())
+	rootCommand.AddCommand(newDoctorCommand())
+	rootCommand.AddCommand(newSwitchCommand())
 
 	return rootCommand
 }

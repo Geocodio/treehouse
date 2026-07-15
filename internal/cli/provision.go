@@ -8,7 +8,6 @@ import (
 
 	"github.com/geocodio/treehouse/internal/compose"
 	"github.com/geocodio/treehouse/internal/instance"
-	"github.com/geocodio/treehouse/internal/provision"
 )
 
 func newProvisionCommand() *cobra.Command {
@@ -28,12 +27,15 @@ func newProvisionCommand() *cobra.Command {
 	return command
 }
 
-// runProvision resumes provisioning from inst.State: MaterializeDependencies
-// only runs when still at StateWorktreeCreated (it's idempotent, but
-// there's no need to repeat it once past that state), while Reconcile and
-// RunHook always run — that is what makes --retry meaningful after a
-// provision-failed hook, and what lets Reconcile pick up a lockfile that
-// drifted after the instance was already provisioned.
+// runProvision resumes provisioning from inst.State, running the same
+// materializeDeps -> ensureStackUp -> reconcileAndHook pipeline `create`
+// does. Per DESIGN.md, `provision` must bring the stack up first if it
+// isn't (completing an instance created with --no-start, which stops at
+// deps-cloned) and then run the hook/reconcile (completing one created with
+// --no-provision, which never ran them at all) — neither case requires
+// --retry, since the instance was never fully provisioned to begin with.
+// --retry is only required to re-run provisioning that already reached
+// StateProvisioned or StateProvisionFailed.
 func runProvision(cmd *cobra.Command, retry bool) error {
 	cwd, err := os.Getwd()
 	if err != nil {
@@ -53,32 +55,24 @@ func runProvision(cmd *cobra.Command, retry bool) error {
 		return err
 	}
 
-	if !retry && inst.State != instance.StateWorktreeCreated {
+	alreadyDone := inst.State == instance.StateProvisioned || inst.State == instance.StateProvisionFailed
+	if !retry && alreadyDone {
 		fmt.Fprintf(cmd.ErrOrStderr(), "instance %q is already at state %q; rerun with --retry to re-provision\n", inst.Name, inst.State)
 		return nil
 	}
 
 	if inst.State == instance.StateWorktreeCreated {
-		if err := provision.MaterializeDependencies(inst, manifestConfig); err != nil {
-			return NewExitError(ExitGenericFailure, err)
-		}
-		inst.AdvanceState(instance.StateDepsCloned)
-		if err := inst.Save(); err != nil {
-			return NewExitError(ExitGenericFailure, err)
+		if err := materializeDeps(inst, manifestConfig); err != nil {
+			return err
 		}
 	}
 
-	if err := provision.Reconcile(inst, manifestConfig); err != nil {
-		return failProvisioning(inst, err)
+	if err := ensureStackUp(cmd, inst, manifestConfig); err != nil {
+		return err
 	}
 
-	if err := provision.RunHook(inst, manifestConfig); err != nil {
-		return failProvisioning(inst, err)
-	}
-
-	inst.AdvanceState(instance.StateProvisioned)
-	if err := inst.Save(); err != nil {
-		return NewExitError(ExitGenericFailure, err)
+	if err := reconcileAndHook(inst, manifestConfig); err != nil {
+		return err
 	}
 
 	fmt.Fprintf(cmd.OutOrStdout(), "instance %q provisioned\n", inst.Name)

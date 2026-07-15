@@ -113,17 +113,16 @@ func (runner *Runner) Restart(inst *instance.Instance, stdout, stderr io.Writer)
 	return runner.run(inst, []string{"restart"}, stdout, stderr)
 }
 
-// Up brings inst's stack up in the background. If the stack has no
-// containers currently running, it first re-verifies the instance's port
-// block against listening sockets (see VerifyPortBlockFree), refusing to
-// start rather than handing docker compose a port some other process has
-// since taken.
+// Up brings inst's stack up in the background. It always re-verifies the
+// instance's port block against listening sockets first (see
+// VerifyPortBlockFree), refusing to start rather than handing docker compose
+// a port some other process has since taken. This check excludes ports
+// already published by inst's own project, so re-running `up` against a
+// partially-up stack never mistakes the stack's own listeners for a
+// conflict.
 func (runner *Runner) Up(inst *instance.Instance, blockSize int, stdout, stderr io.Writer) error {
-	count, err := RunningContainerCount(inst.ComposeProject)
-	if err == nil && count == 0 {
-		if err := VerifyPortBlockFree(inst, blockSize); err != nil {
-			return err
-		}
+	if err := VerifyPortBlockFree(inst, blockSize); err != nil {
+		return err
 	}
 
 	return runner.run(inst, []string{"up", "-d"}, stdout, stderr)

@@ -12,20 +12,19 @@ import (
 	"github.com/geocodio/treehouse/internal/instance"
 	"github.com/geocodio/treehouse/internal/machineconfig"
 	"github.com/geocodio/treehouse/internal/manifest"
-	"github.com/geocodio/treehouse/internal/provision"
 	"github.com/geocodio/treehouse/internal/registry"
 )
 
 func newCreateCommand() *cobra.Command {
 	var name string
-	var noStart, noProvision, jsonOutput bool
+	var noStart, noProvision, jsonOutput, noGC bool
 
 	command := &cobra.Command{
 		Use:   "create <branch>",
 		Short: "Create (or reuse) an instance for a branch",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runCreate(cmd, args[0], name, noStart, noProvision, jsonOutput)
+			return runCreate(cmd, args[0], name, noStart, noProvision, jsonOutput, noGC)
 		},
 	}
 
@@ -33,6 +32,7 @@ func newCreateCommand() *cobra.Command {
 	command.Flags().BoolVar(&noStart, "no-start", false, "don't bring the compose stack up")
 	command.Flags().BoolVar(&noProvision, "no-provision", false, "skip symlink/copy/hook provisioning")
 	command.Flags().BoolVar(&jsonOutput, "json", false, "emit a single JSON document on stdout")
+	command.Flags().BoolVar(&noGC, "no-gc", false, "skip the opportunistic gc pass this command would otherwise trigger")
 
 	return command
 }
@@ -51,7 +51,13 @@ type createResult struct {
 	Existing       bool                   `json:"existing"`
 }
 
-func runCreate(cmd *cobra.Command, branch, explicitName string, noStart, noProvision, jsonOutput bool) error {
+func runCreate(cmd *cobra.Command, branch, explicitName string, noStart, noProvision, jsonOutput, noGC bool) error {
+	// Runs before anything else in this command (not after, e.g., claiming
+	// a port block), so its rate-limit check reflects genuine prior gc
+	// history rather than the side effect of this very command's own
+	// registry.Store.Claim call, which also bumps last_gc_at.
+	maybeRunOpportunisticGC(cmd, noGC)
+
 	cwd, err := os.Getwd()
 	if err != nil {
 		return NewExitError(ExitGenericFailure, err)
@@ -81,17 +87,8 @@ func runCreate(cmd *cobra.Command, branch, explicitName string, noStart, noProvi
 func finishExistingInstance(cmd *cobra.Command, repo *repositoryContext, existing instance.Instance, jsonOutput bool) error {
 	count, err := compose.RunningContainerCount(existing.ComposeProject)
 	if err == nil && count == 0 {
-		runner, runnerErr := compose.NewRunner()
-		if runnerErr != nil {
-			return NewExitError(ExitDockerUnavailable, runnerErr)
-		}
-
-		if upErr := runner.Up(&existing, repo.Manifest.Ports.BlockSize, cmd.OutOrStdout(), cmd.ErrOrStderr()); upErr != nil {
-			return NewExitError(ExitGenericFailure, upErr)
-		}
-		existing.AdvanceState(instance.StateStackUp)
-		if saveErr := existing.Save(); saveErr != nil {
-			return NewExitError(ExitGenericFailure, saveErr)
+		if err := ensureStackUp(cmd, &existing, repo.Manifest); err != nil {
+			return err
 		}
 	}
 
@@ -153,7 +150,7 @@ func runFreshCreate(
 		return NewExitError(ExitGenericFailure, err)
 	}
 
-	ports := instance.PortsForBlock(claimResult.Claim.BlockStart, repo.Manifest.Ports.Env)
+	ports := instance.PortsForBlock(claimResult.Claim.BlockStart, repo.Manifest.Ports.Env, repo.Manifest.Ports.Aliases)
 	inst := instance.New(instance.NewParams{
 		Project:        repo.Manifest.Project,
 		Name:           name,
@@ -168,15 +165,27 @@ func runFreshCreate(
 		return NewExitError(ExitGenericFailure, err)
 	}
 
+	// Per DESIGN.md's state machine (worktree-created -> deps-cloned ->
+	// stack-up -> provisioned), the hook only ever runs once the compose
+	// stack is up, since real-world hooks run database migrations that need
+	// database containers running. --no-start therefore stops at
+	// deps-cloned and skips the hook entirely; `treehouse provision`
+	// completes it later.
 	if !noProvision {
-		if err := provisionInstance(&inst, repo.Manifest); err != nil {
+		if err := materializeDeps(&inst, repo.Manifest); err != nil {
 			return err
 		}
 	}
 
 	if !noStart {
-		if err := bringInstanceUp(cmd, &inst, repo.Manifest); err != nil {
+		if err := ensureStackUp(cmd, &inst, repo.Manifest); err != nil {
 			return err
+		}
+
+		if !noProvision {
+			if err := reconcileAndHook(&inst, repo.Manifest); err != nil {
+				return err
+			}
 		}
 	}
 
@@ -220,69 +229,6 @@ func ensureBranch(mainRepository, branch string) error {
 	}
 
 	return gitx.CreateBranch(mainRepository, branch)
-}
-
-// provisionInstance runs MaterializeDependencies then RunHook (DESIGN.md
-// steps a-d), advancing and saving inst.State after each stage. A hook
-// failure returns an ExitProvisionFailed error with StateProvisionFailed
-// already recorded, leaving the instance inspectable per DESIGN.md's
-// "no automatic rollback" rule.
-func provisionInstance(inst *instance.Instance, manifestConfig *manifest.Manifest) error {
-	if err := provision.MaterializeDependencies(inst, manifestConfig); err != nil {
-		return NewExitError(ExitGenericFailure, err)
-	}
-	inst.AdvanceState(instance.StateDepsCloned)
-	if err := inst.Save(); err != nil {
-		return NewExitError(ExitGenericFailure, err)
-	}
-
-	// Meaningful chiefly on `provision --retry`; harmless (no-op) here
-	// since a freshly cloned lockfile always matches the hash just
-	// recorded for it.
-	if err := provision.Reconcile(inst, manifestConfig); err != nil {
-		return failProvisioning(inst, err)
-	}
-
-	if err := provision.RunHook(inst, manifestConfig); err != nil {
-		return failProvisioning(inst, err)
-	}
-
-	inst.AdvanceState(instance.StateProvisioned)
-	if err := inst.Save(); err != nil {
-		return NewExitError(ExitGenericFailure, err)
-	}
-
-	return nil
-}
-
-func failProvisioning(inst *instance.Instance, cause error) error {
-	inst.AdvanceState(instance.StateProvisionFailed)
-	if saveErr := inst.Save(); saveErr != nil {
-		return NewExitError(ExitGenericFailure, fmt.Errorf("%w (also failed to record provision-failed state: %v)", cause, saveErr))
-	}
-
-	return NewExitError(ExitProvisionFailed, cause)
-}
-
-// bringInstanceUp starts inst's compose stack and advances its state,
-// used by both create's final "up unless --no-start" step and any other
-// caller that needs the same up-then-record-state sequence.
-func bringInstanceUp(cmd *cobra.Command, inst *instance.Instance, manifestConfig *manifest.Manifest) error {
-	runner, err := compose.NewRunner()
-	if err != nil {
-		return NewExitError(ExitDockerUnavailable, err)
-	}
-
-	if err := runner.Up(inst, manifestConfig.Ports.BlockSize, cmd.OutOrStdout(), cmd.ErrOrStderr()); err != nil {
-		return NewExitError(ExitGenericFailure, err)
-	}
-
-	inst.AdvanceState(instance.StateStackUp)
-	if err := inst.Save(); err != nil {
-		return NewExitError(ExitGenericFailure, err)
-	}
-
-	return nil
 }
 
 func printCreateResult(cmd *cobra.Command, manifestConfig *manifest.Manifest, inst *instance.Instance, existing, jsonOutput bool) error {

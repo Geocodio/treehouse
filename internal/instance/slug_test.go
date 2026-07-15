@@ -13,8 +13,11 @@ func TestSlugify(t *testing.T) {
 		{"Feature/My_Feature", "my_feature"},
 		{"ENG-1234-fix-the-thing", "eng-1234-fix-the-thing"},
 		// Per DESIGN.md's rule ([^a-z0-9_-] -> -), each disallowed
-		// character folds to its own hyphen; runs are not collapsed.
-		{"feature/Weird!! Name??", "weird---name"},
+		// character folds to a hyphen, and runs of consecutive hyphens
+		// (however they arose) are collapsed to one.
+		{"feature/Weird!! Name??", "weird-name"},
+		{"foo--bar", "foo-bar"},
+		{"foo---bar___baz", "foo-bar___baz"},
 		{"---", fallbackSlug},
 		{"", fallbackSlug},
 	}

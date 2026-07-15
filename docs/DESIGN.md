@@ -64,6 +64,8 @@ ports:
     HTTP_PORT: 0
     DATABASE_PORT: 1
     MAIL_UI_PORT: 2
+  aliases:                     # optional; ALIAS_VAR -> canonical ENV_VAR
+    WEB_PORT: HTTP_PORT        # written to .treehouse.env with HTTP_PORT's value
 
 provision:                     # all optional
   symlink:                     # shared directories, symlinked to the main repo's copy
@@ -91,9 +93,16 @@ location: ~/treehouses         # optional override of instances home
 
 Validation rules (all produce actionable error messages):
 - every `ports.env` index must be unique and `< block_size`
+- every `ports.aliases` canonical variable must exist in `ports.env`, and an alias name
+  must not collide with a `ports.env` key
 - `project` must match the compose project-name charset
 - `hook`, `symlink`, `copy`, `copy_files` paths must be relative (no `..` escapes)
 - unknown top-level keys are an error (typo protection), unknown nested keys a warning
+
+`ports.aliases` exists because some apps read the same published port under several
+environment variable names. Every alias is written into `.treehouse.env` with the exact
+same value as its canonical `ports.env` variable — it does not consume its own slot in
+the port block.
 
 ## Port registry
 
@@ -133,8 +142,9 @@ instance collisions are therefore structurally impossible; no cleverness require
 ## Instance model
 
 Identity: **one instance per branch per repository.** Instance name defaults to the
-branch slug (last path segment, lowercased, `[^a-z0-9_-]` → `-`). A slug collision with
-a *different* branch auto-suffixes (`foo-2`) with a warning.
+branch slug (last path segment, lowercased, `[^a-z0-9_-]` → `-`, with runs of
+consecutive hyphens collapsed to one). A slug collision with a *different* branch
+auto-suffixes (`foo-2`) with a warning.
 
 `.treehouse.env` (written atomically; both a docker-compose env file and the dispatch
 marker for repo tooling):
@@ -155,6 +165,13 @@ DATABASE_PORT=4641
 
 State machine, recorded in `TREEHOUSE_STATE`:
 `worktree-created → deps-cloned → stack-up → provisioned`, plus `provision-failed`.
+`create` always advances through these states in this fixed order — in particular the
+post-create hook only ever runs once the compose stack is up (`stack-up`), never
+before, since real-world hooks run database migrations that need database containers
+running. `create --no-start` therefore stops at `deps-cloned` and skips the hook
+entirely; run `treehouse provision` from inside the instance later to bring the stack
+up and complete it. `create --no-provision` skips both the dependency clone and the
+hook, but still brings the stack up (to `stack-up`) unless `--no-start` is also given.
 No automatic rollback: a failed hook leaves the instance inspectable; `treehouse
 provision --retry` re-runs from the failed step. Hook idempotency is the adopting
 repository's contract, documented in the adoption guide.
@@ -162,8 +179,8 @@ repository's contract, documented in the adoption guide.
 ## Command behavior
 
 ```
-treehouse create <branch> [--name N] [--no-start] [--no-provision] [--json]
-treehouse list [--json] [--all-repos]
+treehouse create <branch> [--name N] [--no-start] [--no-provision] [--json] [--no-gc]
+treehouse list [--json] [--all-repos] [--no-gc]
 treehouse remove [name] [--force] [--keep-volumes]
 treehouse up | down | restart | status
 treehouse compose <args...>
@@ -184,27 +201,46 @@ Behavioral rules:
   stopped. Branch doesn't exist locally: create it from the current branch (tracking
   branch if it exists on origin).
 - **Every create/list invocation opportunistically runs gc** (idle-stop, never remove)
-  unless `--no-gc` or gc ran within the last hour (timestamp in registry file).
+  unless `--no-gc` or gc ran within the last hour (timestamp in registry file). Failures
+  during this opportunistic pass are printed as warnings and never fail the command.
+- **list --all-repos flags stale claims.** A registry claim whose worktree path no
+  longer exists on disk is reported with `"stale": true` (and its other fields blank)
+  instead of being silently dropped or reported as if it were a healthy instance; `gc`
+  reaps it.
 - **remove/prune never destroy dirty worktrees silently.** Attempt `git worktree remove`
   *without* `--force`; on refusal show `git status --short` and require the user's
   explicit `--force`. Prune additionally treats any dirty tree as in-use regardless of
-  age. Remove releases the port claim and removes the compose stack's volumes by
-  default (`--keep-volumes` to retain).
+  age — and, unlike remove, prune's own `--force` only skips its per-instance
+  confirmation prompt, never the dirty-tree refusal (there is no way to force-prune a
+  dirty worktree). Remove releases the port claim and removes the compose stack's
+  volumes by default (`--keep-volumes` to retain).
+- **prune removes instances via the same code path as remove**: stop the stack, `git
+  worktree remove` without `--force`, release the claim. Every removal candidate is
+  confirmed individually (never one bulk y/N for several instances); on a non-interactive
+  terminal without `--force`, the first candidate that would need a prompt aborts the
+  whole command with exit code 7 rather than looping or guessing.
 - **compose passthrough**: inside an instance, inject
   `--env-file .treehouse.env --project-name $COMPOSE_PROJECT_NAME`; in a main repo,
   pass through unchanged. All internal compose calls go through this same path.
 - **Container queries use the `com.docker.compose.project` label exclusively.** Never
   match container names by substring.
-- **up re-verifies** the port block against listening sockets before starting and fails
-  with a specific error naming the squatting process if occupied.
+- **up re-verifies** the port block against listening sockets before starting, on every
+  invocation (not only when the project has zero running containers) — ports already
+  published by this project's own containers are excluded from the comparison first
+  (queried via docker), so a partially-up stack never collides with itself. It fails
+  with a specific error naming the conflicting port and, when lsof can identify it, the
+  squatting process.
 - **gc idle detection**: an instance is idle when its newest signal — container activity
-  (docker events are not tracked; use container `State.FinishedAt`/`StartedAt` and
-  process stats), git HEAD reflog mtime, and mtime of tracked-file changes — is older
-  than the threshold (default 24h). gc stops containers; it never touches files.
+  (docker events are not tracked; use each container's `State.StartedAt`/`FinishedAt`),
+  git HEAD reflog mtime, and `.treehouse.env` mtime — is older than the threshold
+  (default 24h for `gc`, 30 days for `prune`). gc stops containers and reaps stale
+  registry claims; it never removes a worktree or otherwise touches files.
 - **exec** is sugar: `treehouse compose exec <service> <command...>`.
 - **path** prints the instance directory (for `cd "$(treehouse path foo)"`).
 - **switch** is interactive-only: fzf when present, numbered menu otherwise; refuses to
-  run without a TTY.
+  run without a TTY (exit code 7). All prompts/menus print to stderr; only the selected
+  instance's path goes to stdout, so `cd "$(treehouse switch)"` works the same way as
+  `cd "$(treehouse path <name>)"`.
 - **init** parses `docker-compose.yml`, extracts published ports, proposes a manifest
   with `${VAR:-default}` substitutions and prints the compose diff needed. It never
   edits the compose file.

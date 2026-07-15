@@ -20,29 +20,38 @@ treehouse-managed repository on the machine.
 ## Usage
 
 ```
-treehouse create <branch> [--name N] [--no-start] [--no-provision] [--json]
-treehouse list [--json] [--all-repos]
+treehouse create <branch> [--name N] [--no-start] [--no-provision] [--json] [--no-gc]
+treehouse list [--json] [--all-repos] [--no-gc]
 treehouse remove [name] [--force] [--keep-volumes]
 treehouse path <name>
 treehouse up | down | restart | status
 treehouse compose <args...>
 treehouse exec <service> -- <command...>
 treehouse provision [--retry]
+treehouse switch
+treehouse gc [--idle-hours N] [--dry-run]
+treehouse prune [--days N] [--dry-run] [--force]
+treehouse init [--write]
+treehouse doctor
 treehouse version
 ```
 
 | Command | What it does |
 |---|---|
-| `create` | Creates (or, per branch, reuses) an instance: claims a port block, adds a worktree, writes `.treehouse.env`, provisions, and brings the stack up unless `--no-start`. |
-| `list` | Lists instances for the current repository, or every treehouse-managed repository with `--all-repos`. |
+| `create` | Creates (or, per branch, reuses) an instance: claims a port block, adds a worktree, writes `.treehouse.env`, clones dependencies, brings the stack up, then runs the post-create hook — in that order — unless `--no-start`/`--no-provision` stop it early. |
+| `list` | Lists instances for the current repository, or every treehouse-managed repository with `--all-repos` (flagging any registry claim whose worktree is gone as `"stale": true`). |
 | `remove` | Stops the stack, removes it (and its volumes, unless `--keep-volumes`), removes the worktree, and releases its port claim. Refuses a dirty worktree without `--force`. |
 | `path` | Prints an instance's worktree directory, for `cd "$(treehouse path foo)"`. |
 | `up` / `down` / `restart` / `status` | Context-aware compose wrappers: instance-scoped inside an instance, plain passthrough in a main repository. |
 | `compose` | Raw `docker compose` passthrough, with `--env-file`/`--project-name` injected inside an instance. |
 | `exec` | Sugar for `treehouse compose exec <service> <command...>`. |
-| `provision` | Re-runs symlink/copy/hook provisioning; `--retry` resumes after a failed hook. |
+| `provision` | Brings the stack up if it isn't, then (re-)runs reconcile/hook provisioning; `--retry` re-runs a fully provisioned or provision-failed instance. |
+| `switch` | Interactive-only: pick an instance (fzf if installed, numbered menu otherwise) and print its path, for `cd "$(treehouse switch)"`. |
+| `gc` | Stops (never removes) instances idle past `--idle-hours` (default 24h) and reaps stale registry claims. Runs opportunistically from `create`/`list` too, unless `--no-gc`. |
+| `prune` | Removes instances idle past `--days` (default 30) via the same path as `remove`; a dirty worktree is always skipped, and each removal is confirmed individually. |
+| `init` | Proposes a `.treehouse.yml` from `docker-compose.yml`'s published ports; `--write` saves it (refusing to overwrite an existing manifest). Never edits the compose file. |
+| `doctor` | Checks manifest validity, the compose file's contract (hardcoded ports/`container_name` fail, absolute bind mounts warn), registry health, and tool availability; exits nonzero on any failing check. |
 
-`gc`, `prune`, `init`, `doctor`, and `switch` are not implemented yet (wave 3).
 See [`docs/DESIGN.md`](docs/DESIGN.md) for the full command reference and
 implementation contract.
 

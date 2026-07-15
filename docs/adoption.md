@@ -114,7 +114,15 @@ seeding a database, running migrations, warming a cache, generating an
 app-specific config file, whatever your project's own onboarding already
 does by hand.
 
-Two contract points that matter more here than in an ordinary setup script:
+Three contract points that matter more here than in an ordinary setup script:
+
+**Both the hook's stdout and its stderr land on the CLI's stderr.** `--json`
+on `create` reserves stdout exclusively for the single JSON document it
+emits, in every invocation, not only when a hook happens to run alongside
+`--json`. Write to stdout or stderr freely inside your hook (`echo`,
+your migration tool's normal progress output, whatever) — treehouse routes
+all of it to its own stderr for you, so there's no need for a `exec 1>&2`
+trick at the top of the script to keep chatter off the CLI's stdout.
 
 **The hook is idempotent.** It runs once after a fresh `create`, but also
 every time `treehouse provision` (or `provision --retry`) re-runs — a

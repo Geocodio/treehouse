@@ -14,9 +14,14 @@ import (
 // checked out at the same relative path inside the instance's own worktree
 // as it is in the main repository, with the instance's full environment
 // exported plus TREEHOUSE_MAIN_REPOSITORY (already part of that
-// environment) and TREEHOUSE_INSTANCE_PATH. Output streams directly to this
-// process's stdout/stderr as the hook runs. A missing provision.hook is not
-// an error — the hook is optional.
+// environment) and TREEHOUSE_INSTANCE_PATH. Both the hook's stdout and its
+// stderr stream to this process's stderr — never its stdout, which
+// DESIGN.md's "Agent mode" section reserves exclusively for `--json`'s
+// single data document. That holds in every invocation, not only when
+// --json is passed: stdout is a data channel, period. A chatty hook (e.g.
+// one running database migrations) would otherwise interleave arbitrary
+// text into `treehouse create --json`'s stdout and corrupt it. A missing
+// provision.hook is not an error — the hook is optional.
 //
 // The caller is responsible for mapping a returned error to
 // cli.ExitProvisionFailed (exit code 4) and recording StateProvisionFailed;
@@ -33,7 +38,7 @@ func RunHook(inst *instance.Instance, manifestConfig *manifest.Manifest) error {
 	command.Dir = inst.Path
 	command.Env = append(os.Environ(), inst.EnvPairs()...)
 	command.Env = append(command.Env, "TREEHOUSE_INSTANCE_PATH="+inst.Path)
-	command.Stdout = os.Stdout
+	command.Stdout = os.Stderr
 	command.Stderr = os.Stderr
 
 	if err := command.Run(); err != nil {

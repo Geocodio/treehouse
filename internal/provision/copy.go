@@ -71,9 +71,15 @@ func copyOnWrite(source, destination string) error {
 	return runCp("-a", "--reflink=auto", source, destination)
 }
 
+// runCp streams cp's stdout and stderr to this process's stderr — never its
+// stdout. Plain `cp` (no -v) is normally silent on stdout, but the same
+// invariant as provision.hook and reconcile.command applies uniformly to
+// every child process this package spawns: stdout is reserved for
+// `--json`'s single data document, so nothing spawned here may ever write
+// to it.
 func runCp(args ...string) error {
 	command := exec.Command("cp", args...)
-	command.Stdout = os.Stdout
+	command.Stdout = os.Stderr
 	command.Stderr = os.Stderr
 	return command.Run()
 }

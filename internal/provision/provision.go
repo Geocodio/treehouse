@@ -101,16 +101,21 @@ func Reconcile(inst *instance.Instance, manifestConfig *manifest.Manifest) error
 }
 
 // runInDir runs command as a shell command line with dir as its working
-// directory, streaming its output. command always comes from the adopting
-// repository's own committed .treehouse.yml (reconcile.command, e.g.
-// "composer install" or "npm install") — a trusted, version-controlled
-// config value the developer already has write access to, not external
-// input — so shelling out through sh -c to support ordinary shell syntax
-// is the intended contract, the same trust boundary as provision.hook.
+// directory, streaming both its stdout and its stderr to this process's
+// stderr — never its stdout, for the same reason as provision.hook (see
+// RunHook): stdout is reserved for `--json`'s single data document, in
+// every invocation, so an installer command that happens to print to
+// stdout (e.g. "composer install") must not be able to corrupt it. command
+// always comes from the adopting repository's own committed .treehouse.yml
+// (reconcile.command, e.g. "composer install" or "npm install") — a
+// trusted, version-controlled config value the developer already has write
+// access to, not external input — so shelling out through sh -c to support
+// ordinary shell syntax is the intended contract, the same trust boundary
+// as provision.hook.
 func runInDir(dir, command string) error {
 	cmd := exec.Command("sh", "-c", command)
 	cmd.Dir = dir
-	cmd.Stdout = os.Stdout
+	cmd.Stdout = os.Stderr
 	cmd.Stderr = os.Stderr
 	return cmd.Run()
 }

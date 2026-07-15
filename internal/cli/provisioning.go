@@ -43,13 +43,20 @@ func materializeDeps(cmd *cobra.Command, inst *instance.Instance, manifestConfig
 // `create` and `treehouse provision` need this immediately before running
 // the post-create hook, per DESIGN.md's "provision must bring the stack up
 // first if it isn't" rule.
+//
+// Unlike `treehouse up`'s own call to runner.Up (internal/cli/up.go), whose
+// entire purpose is relaying the compose stack's output, this call site is
+// reused inside `create`'s pipeline — including `create --json`, which
+// writes a single JSON document to this same cmd.OutOrStdout() once
+// provisioning finishes. So the stack's own chatter is routed to stderr
+// here, never stdout, to keep that document uncorrupted.
 func ensureStackUp(cmd *cobra.Command, inst *instance.Instance, manifestConfig *manifest.Manifest) error {
 	runner, err := compose.NewRunner()
 	if err != nil {
 		return NewExitError(ExitDockerUnavailable, err)
 	}
 
-	if err := runner.Up(inst, manifestConfig.Ports.BlockSize, cmd.OutOrStdout(), cmd.ErrOrStderr()); err != nil {
+	if err := runner.Up(inst, manifestConfig.Ports.BlockSize, cmd.ErrOrStderr(), cmd.ErrOrStderr()); err != nil {
 		return NewExitError(ExitGenericFailure, err)
 	}
 

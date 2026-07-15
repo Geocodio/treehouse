@@ -2,6 +2,7 @@ package provision
 
 import (
 	"bytes"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -10,6 +11,50 @@ import (
 	"github.com/geocodio/treehouse/internal/instance"
 	"github.com/geocodio/treehouse/internal/manifest"
 )
+
+// captureStdoutStderr temporarily swaps the real, process-level os.Stdout
+// and os.Stderr for pipes for the duration of fn, returning everything
+// written to each. RunHook and runInDir (reconcile.command) wire their
+// child processes directly to the os.Stdout/os.Stderr package variables
+// rather than to an injectable writer, so this is the only way a test can
+// observe which actual stream a hook or reconcile command's output lands
+// on.
+func captureStdoutStderr(t *testing.T, fn func()) (stdout, stderr string) {
+	t.Helper()
+
+	stdoutRead, stdoutWrite, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe() for stdout: %v", err)
+	}
+	stderrRead, stderrWrite, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe() for stderr: %v", err)
+	}
+
+	originalStdout, originalStderr := os.Stdout, os.Stderr
+	os.Stdout, os.Stderr = stdoutWrite, stderrWrite
+
+	fn()
+
+	os.Stdout, os.Stderr = originalStdout, originalStderr
+	if err := stdoutWrite.Close(); err != nil {
+		t.Fatalf("closing stdout pipe writer: %v", err)
+	}
+	if err := stderrWrite.Close(); err != nil {
+		t.Fatalf("closing stderr pipe writer: %v", err)
+	}
+
+	stdoutBytes, err := io.ReadAll(stdoutRead)
+	if err != nil {
+		t.Fatalf("reading captured stdout: %v", err)
+	}
+	stderrBytes, err := io.ReadAll(stderrRead)
+	if err != nil {
+		t.Fatalf("reading captured stderr: %v", err)
+	}
+
+	return string(stdoutBytes), string(stderrBytes)
+}
 
 func newTestInstance(t *testing.T, mainRepository, instancePath string) *instance.Instance {
 	t.Helper()
@@ -246,5 +291,95 @@ func TestRunHook_NoHookConfiguredIsNotAnError(t *testing.T) {
 
 	if err := RunHook(inst, manifestConfig); err != nil {
 		t.Errorf("RunHook() returned unexpected error with no hook configured: %v", err)
+	}
+}
+
+// TestRunHook_StdoutNeverLandsOnStdout guards DESIGN.md's "Agent mode"
+// contract: stdout is reserved for `--json`'s single data document, so a
+// chatty hook (e.g. one running database migrations) must never be able to
+// interleave its own output into it. Both the hook's stdout and its stderr
+// must stream only to the CLI's stderr.
+func TestRunHook_StdoutNeverLandsOnStdout(t *testing.T) {
+	mainRepository := t.TempDir()
+	instancePath := t.TempDir()
+	if err := os.MkdirAll(instancePath, 0o755); err != nil {
+		t.Fatalf("creating instance dir: %v", err)
+	}
+
+	hookScript := "#!/bin/sh\necho hook-wrote-to-stdout\necho hook-wrote-to-stderr >&2\n"
+	hookPath := filepath.Join(instancePath, "hook.sh")
+	if err := os.WriteFile(hookPath, []byte(hookScript), 0o755); err != nil {
+		t.Fatalf("writing hook script: %v", err)
+	}
+
+	inst := newTestInstance(t, mainRepository, instancePath)
+	manifestConfig := &manifest.Manifest{Provision: manifest.ProvisionConfig{Hook: "hook.sh"}}
+
+	var runErr error
+	stdout, stderr := captureStdoutStderr(t, func() {
+		runErr = RunHook(inst, manifestConfig)
+	})
+
+	if runErr != nil {
+		t.Fatalf("RunHook() returned unexpected error: %v", runErr)
+	}
+	if strings.Contains(stdout, "hook-wrote-to-stdout") {
+		t.Errorf("hook's own stdout leaked onto the CLI's stdout: stdout = %q", stdout)
+	}
+	if !strings.Contains(stderr, "hook-wrote-to-stdout") {
+		t.Errorf("hook's stdout was not redirected to the CLI's stderr: stderr = %q", stderr)
+	}
+	if !strings.Contains(stderr, "hook-wrote-to-stderr") {
+		t.Errorf("hook's own stderr did not stream to the CLI's stderr: stderr = %q", stderr)
+	}
+}
+
+// TestReconcile_CommandOutputNeverLandsOnStdout guards the same "Agent
+// mode" contract as TestRunHook_StdoutNeverLandsOnStdout, but for
+// reconcile.command (runInDir), which shares the same stdout/stderr wiring
+// as provision.hook — a chatty installer (e.g. "composer install") must not
+// be able to corrupt `create --json`'s single data document either.
+func TestReconcile_CommandOutputNeverLandsOnStdout(t *testing.T) {
+	mainRepository := t.TempDir()
+	instancePath := t.TempDir()
+	if err := os.MkdirAll(instancePath, 0o755); err != nil {
+		t.Fatalf("creating instance dir: %v", err)
+	}
+
+	if err := os.WriteFile(filepath.Join(mainRepository, "composer.lock"), []byte("v1"), 0o644); err != nil {
+		t.Fatalf("writing lockfile: %v", err)
+	}
+
+	// inst.LockHashes has no recorded hash for composer.lock yet, so it
+	// mismatches the freshly computed hash and Reconcile runs the command
+	// unconditionally on this first call.
+	inst := newTestInstance(t, mainRepository, instancePath)
+	manifestConfig := &manifest.Manifest{
+		Provision: manifest.ProvisionConfig{
+			Copy: []manifest.CopyEntry{
+				{Path: "vendor", Reconcile: &manifest.ReconcileConfig{
+					Lockfile: "composer.lock",
+					Command:  "echo reconcile-wrote-to-stdout; echo reconcile-wrote-to-stderr >&2",
+				}},
+			},
+		},
+	}
+
+	var runErr error
+	stdout, stderr := captureStdoutStderr(t, func() {
+		runErr = Reconcile(inst, manifestConfig)
+	})
+
+	if runErr != nil {
+		t.Fatalf("Reconcile() returned unexpected error: %v", runErr)
+	}
+	if strings.Contains(stdout, "reconcile-wrote-to-stdout") {
+		t.Errorf("reconcile.command's own stdout leaked onto the CLI's stdout: stdout = %q", stdout)
+	}
+	if !strings.Contains(stderr, "reconcile-wrote-to-stdout") {
+		t.Errorf("reconcile.command's stdout was not redirected to the CLI's stderr: stderr = %q", stderr)
+	}
+	if !strings.Contains(stderr, "reconcile-wrote-to-stderr") {
+		t.Errorf("reconcile.command's own stderr did not stream to the CLI's stderr: stderr = %q", stderr)
 	}
 }

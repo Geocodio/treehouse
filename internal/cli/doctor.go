@@ -189,23 +189,56 @@ func appendComposeCheck(checks *[]doctorCheck, name string, failStatus checkStat
 	*checks = append(*checks, doctorCheck{name, failStatus, detail})
 }
 
+// commandLookup resolves an external tool's version line, or returns an
+// error when the tool is not installed or not runnable. probeToolVersion is
+// the production implementation (exec.LookPath, then `<tool> --version`);
+// doctor's tests inject a stub so both the tool-present and tool-absent
+// branches are exercised without the tools installed on the host. This is
+// what keeps the unit suite host-independent on runners that lack docker
+// (e.g. GitHub's macOS runners).
+type commandLookup func(name string) (version string, err error)
+
+// probeToolVersion reports name's version line. It looks the binary up on
+// PATH first so a missing tool yields a clear not-found error rather than an
+// opaque exec failure, then runs `<name> --version` for the reported detail.
+func probeToolVersion(name string) (string, error) {
+	if _, err := exec.LookPath(name); err != nil {
+		return "", err
+	}
+
+	output, err := exec.Command(name, "--version").Output()
+	if err != nil {
+		return "", err
+	}
+
+	return strings.TrimSpace(string(output)), nil
+}
+
 func doctorCheckToolVersions(checks *[]doctorCheck) {
-	if output, err := exec.Command("git", "--version").Output(); err == nil {
-		*checks = append(*checks, doctorCheck{"git", checkPass, strings.TrimSpace(string(output))})
-	} else {
-		*checks = append(*checks, doctorCheck{"git", checkFail, "git not found or not runnable"})
-	}
+	doctorCheckTools(checks, probeToolVersion, compose.NewRunner)
+}
 
-	if output, err := exec.Command("docker", "--version").Output(); err == nil {
-		*checks = append(*checks, doctorCheck{"docker", checkPass, strings.TrimSpace(string(output))})
-	} else {
-		*checks = append(*checks, doctorCheck{"docker", checkFail, "docker not found or not runnable"})
-	}
+// doctorCheckTools is doctorCheckToolVersions with its side-effecting seams
+// injected: lookup probes a binary's version and newRunner detects a working
+// compose implementation. Isolating them behind parameters lets the unit
+// tests drive both the tools-present and tools-absent branches deterministically,
+// without depending on what happens to be installed on the runner.
+func doctorCheckTools(checks *[]doctorCheck, lookup commandLookup, newRunner func() (*compose.Runner, error)) {
+	appendToolCheck(checks, lookup, "git", "install git and ensure it is on your PATH")
+	appendToolCheck(checks, lookup, "docker", "install Docker (Docker Desktop or the docker engine) and ensure it is on your PATH")
 
-	if _, err := compose.NewRunner(); err == nil {
+	if _, err := newRunner(); err == nil {
 		*checks = append(*checks, doctorCheck{"docker compose", checkPass, ""})
 	} else {
-		*checks = append(*checks, doctorCheck{"docker compose", checkFail, "neither `docker compose` nor `docker-compose` is available"})
+		*checks = append(*checks, doctorCheck{"docker compose", checkFail, "neither `docker compose` nor `docker-compose` is available; install the docker compose plugin"})
+	}
+}
+
+func appendToolCheck(checks *[]doctorCheck, lookup commandLookup, name, remedy string) {
+	if version, err := lookup(name); err == nil {
+		*checks = append(*checks, doctorCheck{name, checkPass, version})
+	} else {
+		*checks = append(*checks, doctorCheck{name, checkFail, fmt.Sprintf("%s not found or not runnable: %s", name, remedy)})
 	}
 }
 

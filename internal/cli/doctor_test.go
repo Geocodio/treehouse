@@ -1,11 +1,13 @@
 package cli
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/geocodio/treehouse/internal/compose"
 	"github.com/geocodio/treehouse/internal/registry"
 )
 
@@ -160,17 +162,73 @@ func TestDoctorCheckRegistry_FlagsStaleClaimAsWarning(t *testing.T) {
 	}
 }
 
-func TestDoctorCheckToolVersions_GitAndDockerAreAvailable(t *testing.T) {
-	// This environment has both git and docker installed (a prerequisite
-	// for the rest of this test suite too), so both must pass.
+func TestDoctorCheckTools_ReportsVersionsWhenToolsPresent(t *testing.T) {
+	lookup := func(name string) (string, error) {
+		return name + " version 1.2.3", nil
+	}
+	newRunner := func() (*compose.Runner, error) {
+		return &compose.Runner{}, nil
+	}
+
+	var checks []doctorCheck
+	doctorCheckTools(&checks, lookup, newRunner)
+
+	for _, name := range []string{"git", "docker"} {
+		check := findCheck(t, checks, name)
+		if check.Status != checkPass {
+			t.Errorf("%s check status = %v, detail %q, want PASS", name, check.Status, check.Detail)
+		}
+		if !strings.Contains(check.Detail, "version 1.2.3") {
+			t.Errorf("%s detail = %q, want it to report the tool version", name, check.Detail)
+		}
+	}
+
+	if check := findCheck(t, checks, "docker compose"); check.Status != checkPass {
+		t.Errorf("docker compose check status = %v, want PASS when a runner is available", check.Status)
+	}
+}
+
+func TestDoctorCheckTools_FailsWithActionableMessageWhenToolsMissing(t *testing.T) {
+	lookup := func(name string) (string, error) {
+		return "", fmt.Errorf("%s: executable file not found in $PATH", name)
+	}
+	newRunner := func() (*compose.Runner, error) {
+		return nil, compose.ErrDockerUnavailable
+	}
+
+	var checks []doctorCheck
+	doctorCheckTools(&checks, lookup, newRunner)
+
+	for _, name := range []string{"git", "docker", "docker compose"} {
+		check := findCheck(t, checks, name)
+		if check.Status != checkFail {
+			t.Errorf("%s check status = %v, want FAIL when the tool is missing", name, check.Status)
+		}
+		if strings.TrimSpace(check.Detail) == "" {
+			t.Errorf("%s FAIL check has an empty detail, want an actionable message", name)
+		}
+	}
+
+	if detail := findCheck(t, checks, "docker").Detail; !strings.Contains(detail, "install Docker") {
+		t.Errorf("docker FAIL detail = %q, want it to tell the user how to remediate", detail)
+	}
+}
+
+// TestDoctorCheckToolVersions_HostIndependentWhenToolsAbsent exercises the
+// real production probes against an emptied PATH, approximating a barren
+// runner such as GitHub's macOS runners (which have no docker). Every tool
+// check must FAIL cleanly rather than pass on host state or hang -- this is
+// the regression that turned CI red on macOS.
+func TestDoctorCheckToolVersions_HostIndependentWhenToolsAbsent(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
+
 	var checks []doctorCheck
 	doctorCheckToolVersions(&checks)
 
-	if findCheck(t, checks, "git").Status != checkPass {
-		t.Errorf("git check did not pass in an environment with git installed")
-	}
-	if findCheck(t, checks, "docker").Status != checkPass {
-		t.Errorf("docker check did not pass in an environment with docker installed")
+	for _, name := range []string{"git", "docker", "docker compose"} {
+		if check := findCheck(t, checks, name); check.Status != checkFail {
+			t.Errorf("%s check status = %v, want FAIL when no tools are on PATH", name, check.Status)
+		}
 	}
 }
 

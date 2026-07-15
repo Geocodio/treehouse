@@ -20,11 +20,31 @@ treehouse-managed repository on the machine.
 ## Usage
 
 ```
+treehouse create <branch> [--name N] [--no-start] [--no-provision] [--json]
+treehouse list [--json] [--all-repos]
+treehouse remove [name] [--force] [--keep-volumes]
+treehouse path <name>
+treehouse up | down | restart | status
+treehouse compose <args...>
+treehouse exec <service> -- <command...>
+treehouse provision [--retry]
 treehouse version
 ```
 
+| Command | What it does |
+|---|---|
+| `create` | Creates (or, per branch, reuses) an instance: claims a port block, adds a worktree, writes `.treehouse.env`, provisions, and brings the stack up unless `--no-start`. |
+| `list` | Lists instances for the current repository, or every treehouse-managed repository with `--all-repos`. |
+| `remove` | Stops the stack, removes it (and its volumes, unless `--keep-volumes`), removes the worktree, and releases its port claim. Refuses a dirty worktree without `--force`. |
+| `path` | Prints an instance's worktree directory, for `cd "$(treehouse path foo)"`. |
+| `up` / `down` / `restart` / `status` | Context-aware compose wrappers: instance-scoped inside an instance, plain passthrough in a main repository. |
+| `compose` | Raw `docker compose` passthrough, with `--env-file`/`--project-name` injected inside an instance. |
+| `exec` | Sugar for `treehouse compose exec <service> <command...>`. |
+| `provision` | Re-runs symlink/copy/hook provisioning; `--retry` resumes after a failed hook. |
+
+`gc`, `prune`, `init`, `doctor`, and `switch` are not implemented yet (wave 3).
 See [`docs/DESIGN.md`](docs/DESIGN.md) for the full command reference and
-implementation contract; only `treehouse version` ships in this wave.
+implementation contract.
 
 ## Exit codes
 

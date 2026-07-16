@@ -1,10 +1,25 @@
 package provision
 
 import (
+	"bytes"
+	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+
+	"github.com/geocodio/treehouse/internal/manifest"
 )
+
+// requiredSymlinks wraps plain relative paths as required (non-optional)
+// provision.symlink entries, the string form's meaning.
+func requiredSymlinks(paths ...string) []manifest.SymlinkEntry {
+	entries := make([]manifest.SymlinkEntry, len(paths))
+	for i, path := range paths {
+		entries[i] = manifest.SymlinkEntry{Path: path}
+	}
+	return entries
+}
 
 func TestSymlinkEntries_CreatesSymlinkToMainRepository(t *testing.T) {
 	mainRepository := t.TempDir()
@@ -18,7 +33,7 @@ func TestSymlinkEntries_CreatesSymlinkToMainRepository(t *testing.T) {
 		t.Fatalf("writing file: %v", err)
 	}
 
-	if err := symlinkEntries(mainRepository, instancePath, []string{"data/shared"}); err != nil {
+	if err := symlinkEntries(mainRepository, instancePath, requiredSymlinks("data/shared"), io.Discard); err != nil {
 		t.Fatalf("symlinkEntries() returned unexpected error: %v", err)
 	}
 
@@ -63,7 +78,7 @@ func TestSymlinkEntries_ReplacesExistingSymlink(t *testing.T) {
 		t.Fatalf("creating stale symlink: %v", err)
 	}
 
-	if err := symlinkEntries(mainRepository, instancePath, []string{"data"}); err != nil {
+	if err := symlinkEntries(mainRepository, instancePath, requiredSymlinks("data"), io.Discard); err != nil {
 		t.Fatalf("symlinkEntries() returned unexpected error: %v", err)
 	}
 
@@ -92,7 +107,7 @@ func TestSymlinkEntries_RefusesNonEmptyRealDirectory(t *testing.T) {
 		t.Fatalf("writing file: %v", err)
 	}
 
-	err := symlinkEntries(mainRepository, instancePath, []string{"data"})
+	err := symlinkEntries(mainRepository, instancePath, requiredSymlinks("data"), io.Discard)
 	if err == nil {
 		t.Fatalf("symlinkEntries() succeeded against a non-empty real directory, want refusal")
 	}
@@ -111,7 +126,7 @@ func TestSymlinkEntries_FailsOnMissingSource(t *testing.T) {
 	mainRepository := t.TempDir()
 	instancePath := t.TempDir()
 
-	err := symlinkEntries(mainRepository, instancePath, []string{"data/shared"})
+	err := symlinkEntries(mainRepository, instancePath, requiredSymlinks("data/shared"), io.Discard)
 	if err == nil {
 		t.Fatalf("symlinkEntries() succeeded for a missing source, want a failure")
 	}
@@ -134,7 +149,7 @@ func TestSymlinkEntries_ReplacesEmptyRealDirectory(t *testing.T) {
 		t.Fatalf("creating empty dir: %v", err)
 	}
 
-	if err := symlinkEntries(mainRepository, instancePath, []string{"data"}); err != nil {
+	if err := symlinkEntries(mainRepository, instancePath, requiredSymlinks("data"), io.Discard); err != nil {
 		t.Fatalf("symlinkEntries() returned unexpected error for an empty real directory: %v", err)
 	}
 
@@ -144,5 +159,58 @@ func TestSymlinkEntries_ReplacesEmptyRealDirectory(t *testing.T) {
 	}
 	if info.Mode()&os.ModeSymlink == 0 {
 		t.Errorf("empty real directory was not replaced with a symlink")
+	}
+}
+
+// TestSymlinkEntries_SkipsMissingOptionalSourceWithWarning covers the opt-in
+// relaxation of the hard-fail rule: an entry flagged `optional: true` whose
+// source is absent from the main repository is skipped with a warning
+// instead of aborting provisioning, and no dangling symlink is left behind.
+func TestSymlinkEntries_SkipsMissingOptionalSourceWithWarning(t *testing.T) {
+	mainRepository := t.TempDir()
+	instancePath := t.TempDir()
+
+	var warnings bytes.Buffer
+	entries := []manifest.SymlinkEntry{{Path: "dev-certs", Optional: true}}
+	if err := symlinkEntries(mainRepository, instancePath, entries, &warnings); err != nil {
+		t.Fatalf("symlinkEntries() returned an error for a missing optional source: %v", err)
+	}
+
+	if _, statErr := os.Lstat(filepath.Join(instancePath, "dev-certs")); !os.IsNotExist(statErr) {
+		t.Errorf("symlinkEntries() created a link for a skipped optional source")
+	}
+	if !strings.Contains(warnings.String(), "skipping dev-certs") {
+		t.Errorf("warnings = %q, want it to mention skipping dev-certs", warnings.String())
+	}
+}
+
+// TestSymlinkEntries_LinksPresentOptionalSource confirms `optional` only
+// changes the missing-source behavior: when the source does exist, an
+// optional entry is symlinked exactly like a required one.
+func TestSymlinkEntries_LinksPresentOptionalSource(t *testing.T) {
+	mainRepository := t.TempDir()
+	instancePath := t.TempDir()
+
+	sharedDir := filepath.Join(mainRepository, "dev-certs")
+	if err := os.MkdirAll(sharedDir, 0o755); err != nil {
+		t.Fatalf("creating shared dir: %v", err)
+	}
+
+	var warnings bytes.Buffer
+	entries := []manifest.SymlinkEntry{{Path: "dev-certs", Optional: true}}
+	if err := symlinkEntries(mainRepository, instancePath, entries, &warnings); err != nil {
+		t.Fatalf("symlinkEntries() returned unexpected error: %v", err)
+	}
+
+	link := filepath.Join(instancePath, "dev-certs")
+	info, err := os.Lstat(link)
+	if err != nil {
+		t.Fatalf("Lstat(link): %v", err)
+	}
+	if info.Mode()&os.ModeSymlink == 0 {
+		t.Errorf("%s is not a symlink", link)
+	}
+	if warnings.Len() != 0 {
+		t.Errorf("warnings = %q, want none when the optional source is present", warnings.String())
 	}
 }

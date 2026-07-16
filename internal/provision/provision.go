@@ -23,11 +23,12 @@ import (
 // reconcile step. It does not itself change inst.State or save it — the
 // caller advances the state to StateDepsCloned and persists it, so the two
 // changes land in a single atomic env-file write. warnings receives one
-// line for every provision.copy/copy_files source that doesn't exist in the
-// main repository (see copyEntry/copyFiles); production callers pass the
-// command's own stderr.
+// line for every provision.copy/copy_files source — and every
+// `optional: true` provision.symlink source — that doesn't exist in the
+// main repository (see copyEntry/copyFiles/symlinkEntries); production
+// callers pass the command's own stderr.
 func MaterializeDependencies(inst *instance.Instance, manifestConfig *manifest.Manifest, warnings io.Writer) error {
-	if err := symlinkEntries(inst.MainRepository, inst.Path, manifestConfig.Provision.Symlink); err != nil {
+	if err := symlinkEntries(inst.MainRepository, inst.Path, manifestConfig.Provision.Symlink, warnings); err != nil {
 		return err
 	}
 

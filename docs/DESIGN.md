@@ -102,7 +102,9 @@ ports:
 
 provision:                     # all optional
   symlink:                     # shared directories, symlinked to the main repo's copy
-    - data/shared
+    - data/shared              # string form = required; missing source is a hard failure
+    - path: dev-certs          # struct form...
+      optional: true           # ...missing source is warned-and-skipped instead
   copy:                        # per-instance mutable directories, CoW-cloned
     - path: vendor
       reconcile:               # optional: re-run installer only when lockfile drifted
@@ -313,11 +315,17 @@ about what a missing source means:
   `node_modules/`, `public/build`) that a real adoption dry-run may hit before
   the main repository has ever built them locally; that's an ordinary, expected
   state, not a broken manifest.
-- **`symlink`**: a missing source is always a hard failure. `symlink` entries
-  are for genuinely shared data an instance never generates on its own (seed
-  data, shared uploads) — if it isn't in the main repository, it doesn't exist
-  anywhere, which is a real misconfiguration worth stopping the run over rather
-  than silently creating a dangling symlink.
+- **`symlink`**: a missing source is a hard failure *by default*. `symlink`
+  entries are for genuinely shared data an instance never generates on its own
+  (seed data, shared uploads) — if it isn't in the main repository, it doesn't
+  exist anywhere, which is a real misconfiguration worth stopping the run over
+  rather than silently creating a dangling symlink. An individual entry can
+  opt out of that strictness with the struct form `{path: dev-certs, optional:
+  true}`: a missing source is then warned-and-skipped just like `copy`, for a
+  symlink target the main repository may legitimately not have generated yet (a
+  dev-cert bundle, a build-artifact directory a hand-rolled worktree script
+  would have guarded with `[ -d ... ]`). Strict-by-default keeps a genuine typo
+  loud while letting deliberately-untracked targets stay soft.
 
 A skipped `copy` entry that also declares `reconcile` runs `reconcile.command`
 immediately and unconditionally, rather than recording a lockfile hash and

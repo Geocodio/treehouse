@@ -104,8 +104,11 @@ location: ~/treehouses
 		}
 	}
 
-	if len(result.Provision.Symlink) != 1 || result.Provision.Symlink[0] != "data/shared" {
-		t.Errorf("Provision.Symlink = %v, want [data/shared]", result.Provision.Symlink)
+	if len(result.Provision.Symlink) != 1 || result.Provision.Symlink[0].Path != "data/shared" {
+		t.Errorf("Provision.Symlink = %v, want [{data/shared}]", result.Provision.Symlink)
+	}
+	if result.Provision.Symlink[0].Optional {
+		t.Errorf("Symlink[0].Optional = true, want false for the plain string form")
 	}
 
 	if len(result.Provision.Copy) != 3 {
@@ -143,6 +146,60 @@ location: ~/treehouses
 
 	if result.Location != "~/treehouses" {
 		t.Errorf("Location = %q, want ~/treehouses", result.Location)
+	}
+}
+
+// TestLoad_SymlinkStructFormWithOptional parses provision.symlink's struct
+// form, which pairs a path with `optional: true` to downgrade a missing
+// source from a hard failure to a warn-and-skip. The plain string and struct
+// forms may be freely mixed in the same list.
+func TestLoad_SymlinkStructFormWithOptional(t *testing.T) {
+	path := writeManifest(t, `
+version: 1
+project: myapp
+
+provision:
+  symlink:
+    - data/shared
+    - path: dev-certs
+      optional: true
+`)
+
+	result, warnings, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() returned unexpected error: %v", err)
+	}
+	if len(warnings) != 0 {
+		t.Errorf("Load() returned unexpected warnings: %v", warnings)
+	}
+
+	if len(result.Provision.Symlink) != 2 {
+		t.Fatalf("len(Provision.Symlink) = %d, want 2", len(result.Provision.Symlink))
+	}
+	if result.Provision.Symlink[0].Path != "data/shared" || result.Provision.Symlink[0].Optional {
+		t.Errorf("Symlink[0] = %+v, want {data/shared false}", result.Provision.Symlink[0])
+	}
+	if result.Provision.Symlink[1].Path != "dev-certs" || !result.Provision.Symlink[1].Optional {
+		t.Errorf("Symlink[1] = %+v, want {dev-certs true}", result.Provision.Symlink[1])
+	}
+}
+
+func TestLoad_SymlinkStructFormMissingPath(t *testing.T) {
+	path := writeManifest(t, `
+version: 1
+project: myapp
+
+provision:
+  symlink:
+    - optional: true
+`)
+
+	_, _, err := Load(path)
+	if err == nil {
+		t.Fatalf("Load() succeeded for a symlink entry missing \"path\", want an error")
+	}
+	if !strings.Contains(err.Error(), "provision.symlink") || !strings.Contains(err.Error(), "path") {
+		t.Errorf("error = %v, want it to mention the missing provision.symlink path", err)
 	}
 }
 

@@ -18,6 +18,11 @@ var knownCopyEntryKeys = map[string]bool{
 	"reconcile": true,
 }
 
+var knownSymlinkEntryKeys = map[string]bool{
+	"path":     true,
+	"optional": true,
+}
+
 var knownReconcileKeys = map[string]bool{
 	"lockfile": true,
 	"command":  true,
@@ -37,9 +42,10 @@ func parseProvision(node *yaml.Node, result *Manifest) ([]string, []Warning) {
 
 		switch keyNode.Value {
 		case "symlink":
-			paths, pathProblems := parseRelativePathList("provision.symlink", valueNode)
-			problems = append(problems, pathProblems...)
-			result.Provision.Symlink = paths
+			entries, symlinkProblems, symlinkWarnings := parseSymlinkEntries(valueNode)
+			problems = append(problems, symlinkProblems...)
+			warnings = append(warnings, symlinkWarnings...)
+			result.Provision.Symlink = entries
 		case "copy_files":
 			paths, pathProblems := parseRelativePathList("provision.copy_files", valueNode)
 			problems = append(problems, pathProblems...)
@@ -95,6 +101,92 @@ func parseRelativePathList(key string, node *yaml.Node) ([]string, []string) {
 	}
 
 	return paths, problems
+}
+
+// parseSymlinkEntries handles provision.symlink's string-or-struct entries,
+// mirroring parseCopyEntries: a plain string is a required shared path, while
+// a mapping pairs a path with an optional `optional` flag that downgrades a
+// missing source from a hard failure to a warn-and-skip.
+func parseSymlinkEntries(node *yaml.Node) ([]SymlinkEntry, []string, []Warning) {
+	if node.Kind != yaml.SequenceNode {
+		return nil, []string{"provision.symlink: must be a list"}, nil
+	}
+
+	var problems []string
+	var warnings []Warning
+	entries := make([]SymlinkEntry, 0, len(node.Content))
+
+	for _, item := range node.Content {
+		switch item.Kind {
+		case yaml.ScalarNode:
+			var path string
+			if err := item.Decode(&path); err != nil {
+				problems = append(problems, fmt.Sprintf("provision.symlink: entry must be a string or mapping (%s)", err))
+				continue
+			}
+			if err := validateRelativePath("provision.symlink", path); err != nil {
+				problems = append(problems, err.Error())
+				continue
+			}
+			entries = append(entries, SymlinkEntry{Path: path})
+		case yaml.MappingNode:
+			entry, entryProblems, entryWarnings := parseSymlinkEntryMapping(item)
+			problems = append(problems, entryProblems...)
+			warnings = append(warnings, entryWarnings...)
+			if entry != nil {
+				entries = append(entries, *entry)
+			}
+		default:
+			problems = append(problems, "provision.symlink: entry must be a string or mapping")
+		}
+	}
+
+	return entries, problems, warnings
+}
+
+func parseSymlinkEntryMapping(node *yaml.Node) (*SymlinkEntry, []string, []Warning) {
+	var problems []string
+	var warnings []Warning
+	entry := SymlinkEntry{}
+	havePath := false
+
+	for index := 0; index+1 < len(node.Content); index += 2 {
+		keyNode := node.Content[index]
+		valueNode := node.Content[index+1]
+
+		switch keyNode.Value {
+		case "path":
+			havePath = true
+			var path string
+			if err := valueNode.Decode(&path); err != nil {
+				problems = append(problems, fmt.Sprintf("provision.symlink: path must be a string (%s)", err))
+				break
+			}
+			if err := validateRelativePath("provision.symlink", path); err != nil {
+				problems = append(problems, err.Error())
+				break
+			}
+			entry.Path = path
+		case "optional":
+			if err := valueNode.Decode(&entry.Optional); err != nil {
+				problems = append(problems, fmt.Sprintf("provision.symlink: optional must be a boolean (%s)", err))
+			}
+		default:
+			if !knownSymlinkEntryKeys[keyNode.Value] {
+				warnings = append(warnings, Warning{
+					Key:     "provision.symlink." + keyNode.Value,
+					Message: fmt.Sprintf("unknown key (line %d); ignored", keyNode.Line),
+				})
+			}
+		}
+	}
+
+	if !havePath {
+		problems = append(problems, "provision.symlink: entry is missing required key \"path\"")
+		return nil, problems, warnings
+	}
+
+	return &entry, problems, warnings
 }
 
 // parseCopyEntries handles provision.copy's string-or-struct entries: a

@@ -35,6 +35,8 @@ ports:
 provision:
   symlink:
     - data/shared
+    - path: dev-certs
+      optional: true
   copy:
     - path: vendor
       reconcile:
@@ -119,14 +121,26 @@ mutable dependencies, then small config files, then anything scripted).
   instance should see identically (seed data, shared uploads in
   development, etc.) — never for anything an instance needs to mutate
   independently, since all instances share the same underlying files.
+  Each entry takes one of two forms:
+  - a plain string (`data/shared`): a **required** shared path.
+  - a mapping with `path` and `optional: true`:
+    ```yaml
+    - path: dev-certs
+      optional: true
+    ```
   If the destination is already a symlink, it's replaced; if it's an
   empty real directory, that directory is removed first; a *non-empty*
   real directory refuses with an error rather than silently discarding its
   contents. A source that doesn't exist anywhere in the main repository is
-  always a hard failure (never a warning): unlike `copy`/`copy_files`
-  below, `symlink` is for data an instance never generates on its own, so
-  a missing source is a real misconfiguration, not a routine "not built
-  yet" state.
+  **a hard failure by default** (never a warning): unlike `copy`/`copy_files`
+  below, `symlink` is normally for data an instance never generates on its
+  own, so a missing source is usually a real misconfiguration, not a routine
+  "not built yet" state. An entry flagged `optional: true` opts out of that
+  strictness — its missing source is skipped with a warning ("skipping
+  dev-certs: not present in main repository") and provisioning continues,
+  for a symlink target the main repository may legitimately not have
+  generated yet (a dev-cert bundle, a build-artifact directory). A present
+  source is symlinked identically whether or not the entry is optional.
 - **`copy`**: a list of paths to copy-on-write clone into the instance —
   each instance gets its own independent, mutable copy, cheaply (see
   [`ports.md`](ports.md)'s sibling section in `DESIGN.md` on the

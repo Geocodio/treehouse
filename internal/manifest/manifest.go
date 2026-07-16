@@ -38,10 +38,21 @@ type PortsConfig struct {
 // optional: shared directories to symlink, mutable directories to
 // copy-on-write clone, plain files to copy, and a post-create hook script.
 type ProvisionConfig struct {
-	Symlink   []string
+	Symlink   []SymlinkEntry
 	Copy      []CopyEntry
 	CopyFiles []string
 	Hook      string
+}
+
+// SymlinkEntry is one entry of provision.symlink. It accepts either the
+// plain string form (a required shared path whose missing source is a hard
+// failure) or the struct form pairing a path with `optional: true`, which
+// downgrades a missing source to a warn-and-skip — for a symlink target the
+// main repository may legitimately not have generated yet (dev certs, a
+// build artifact directory).
+type SymlinkEntry struct {
+	Path     string
+	Optional bool
 }
 
 // CopyEntry is one entry of provision.copy. It accepts either the plain

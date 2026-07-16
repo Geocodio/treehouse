@@ -2,8 +2,11 @@ package provision
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
+
+	"github.com/geocodio/treehouse/internal/manifest"
 )
 
 // symlinkEntries symlinks every provision.symlink entry to the main
@@ -12,19 +15,31 @@ import (
 // there instead — that would silently discard instance-local content the
 // developer may not have meant to share.
 //
-// Unlike copyEntry/copyFiles, a missing source is a hard failure here, not
-// a warn-and-skip: symlink is for genuinely shared data (seed data, shared
-// uploads) the instance itself never generates, so a missing source means
-// that data plainly doesn't exist anywhere — a real misconfiguration, not
-// a routine "not built yet" state. Left unchecked, os.Symlink would happily
+// A missing source is a hard failure by default, unlike copyEntry/copyFiles:
+// symlink is for genuinely shared data (seed data, shared uploads) the
+// instance itself never generates, so a missing source usually means that
+// data plainly doesn't exist anywhere — a real misconfiguration, not a
+// routine "not built yet" state. Left unchecked, os.Symlink would happily
 // create a dangling symlink and fail silently at first use instead.
-func symlinkEntries(mainRepository, instancePath string, entries []string) error {
-	for _, relativePath := range entries {
+//
+// An entry may opt out of that strictness with `optional: true`: a missing
+// source is then skipped with a warning to warnings (matching copy's
+// behavior), for a symlink target the main repository may legitimately not
+// have generated yet — dev certs or a build-artifact directory a hand-rolled
+// worktree script would have guarded with `[ -d ... ]`. Present sources are
+// symlinked identically whether or not the entry is optional.
+func symlinkEntries(mainRepository, instancePath string, entries []manifest.SymlinkEntry, warnings io.Writer) error {
+	for _, entry := range entries {
+		relativePath := entry.Path
 		target := filepath.Join(mainRepository, relativePath)
 		link := filepath.Join(instancePath, relativePath)
 
 		if _, err := os.Stat(target); err != nil {
 			if os.IsNotExist(err) {
+				if entry.Optional {
+					fmt.Fprintf(warnings, "warning: skipping %s: not present in main repository\n", relativePath)
+					continue
+				}
 				return fmt.Errorf("provision.symlink %s: source %s does not exist in the main repository", relativePath, target)
 			}
 			return fmt.Errorf("provision.symlink %s: %w", relativePath, err)

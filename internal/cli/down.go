@@ -9,23 +9,25 @@ import (
 )
 
 func newDownCommand() *cobra.Command {
-	var keepVolumes bool
+	var removeVolumes, keepVolumes bool
 
 	command := &cobra.Command{
 		Use:   "down",
 		Short: "Bring the compose stack down",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runDown(cmd, keepVolumes)
+			return runDown(cmd, removeVolumes)
 		},
 	}
 
-	command.Flags().BoolVar(&keepVolumes, "keep-volumes", false, "don't remove the compose stack's named volumes")
+	command.Flags().BoolVar(&removeVolumes, "volumes", false, "also remove the compose stack's named volumes (deletes its data)")
+	command.Flags().BoolVar(&keepVolumes, "keep-volumes", false, "")
+	_ = command.Flags().MarkDeprecated("keep-volumes", "down keeps volumes by default; pass --volumes to remove them")
 
 	return command
 }
 
-func runDown(cmd *cobra.Command, keepVolumes bool) error {
+func runDown(cmd *cobra.Command, removeVolumes bool) error {
 	cwd, err := os.Getwd()
 	if err != nil {
 		return NewExitError(ExitGenericFailure, err)
@@ -41,7 +43,7 @@ func runDown(cmd *cobra.Command, keepVolumes bool) error {
 		return NewExitError(ExitDockerUnavailable, err)
 	}
 
-	if err := runner.Down(inst, !keepVolumes, cmd.OutOrStdout(), cmd.ErrOrStderr()); err != nil {
+	if err := runner.Down(inst, removeVolumes, cmd.OutOrStdout(), cmd.ErrOrStderr()); err != nil {
 		return NewExitError(ExitGenericFailure, err)
 	}
 

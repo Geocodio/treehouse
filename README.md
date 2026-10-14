@@ -69,7 +69,7 @@ stopped, rather than erroring or creating a second one.
 | `remove [name]` | `--force`, `--keep-volumes` | Stops the stack, removes it (and its volumes, unless `--keep-volumes`), removes the worktree, and releases its port claim. Refuses a dirty worktree, and refuses to prompt outside a terminal, without `--force`. Omit `name` to remove the instance containing the current directory. |
 | `path <name>` | | Prints an instance's worktree directory, for `cd "$(treehouse path foo)"`. |
 | `up` | | Brings the compose stack up; instance-scoped inside an instance (re-verifying its port block first), plain passthrough in a main repository. |
-| `down` | `--keep-volumes` | Brings the compose stack down (removing named volumes unless `--keep-volumes`). |
+| `down` | `--volumes` | Brings the compose stack down. Keeps named volumes, so the instance's data survives; `--volumes` removes them too. |
 | `restart` | | Restarts the compose stack. |
 | `status` | | Shows the instance's state and running container count (or plain `docker compose ps` in a main repository). |
 | `compose -- <args...>` | | Raw `docker compose` passthrough, with `--env-file`/`--project-name` injected inside an instance. |

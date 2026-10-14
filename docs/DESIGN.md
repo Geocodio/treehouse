@@ -217,7 +217,7 @@ repository's contract, documented in the adoption guide.
 treehouse create <branch> [--name N] [--no-start] [--no-provision] [--json] [--no-gc]
 treehouse list [--json] [--all-repos] [--no-gc]
 treehouse remove [name] [--force] [--keep-volumes]
-treehouse up | down | restart | status
+treehouse up | down [--volumes] | restart | status
 treehouse compose <args...>
 treehouse exec <service> -- <command...>
 treehouse provision [--retry]

@@ -20,7 +20,7 @@ treehouse-managed repository on the machine.
 ```
 brew tap geocodio/tap
 brew trust geocodio/tap   # newer Homebrew requires trusting third-party taps once
-brew install treehouse
+brew install geocodio/tap/treehouse
 ```
 
 **`go install`:**

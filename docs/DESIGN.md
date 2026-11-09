@@ -223,6 +223,7 @@ treehouse exec <service> -- <command...>
 treehouse provision [--retry]
 treehouse switch
 treehouse path <name>
+treehouse urls [name] [--json]
 treehouse gc [--idle-hours N] [--dry-run]
 treehouse prune [--days N] [--dry-run] [--force]
 treehouse init
@@ -272,6 +273,10 @@ Behavioral rules:
   registry claims; it never removes a worktree or otherwise touches files.
 - **exec** is sugar: `treehouse compose exec <service> <command...>`.
 - **path** prints the instance directory (for `cd "$(treehouse path foo)"`).
+- **urls** prints the manifest's `urls` entries rendered with the instance's ports
+  (the instance containing cwd, or `name`). `--json` emits `{"instance", "urls"}`,
+  with `urls` shaped exactly like create's. No `urls` configured: stdout stays empty and
+  a note goes to stderr.
 - **switch** is interactive-only: fzf when present, numbered menu otherwise; refuses to
   run without a TTY (exit code 7). All prompts/menus print to stderr; only the selected
   instance's path goes to stdout, so `cd "$(treehouse switch)"` works the same way as

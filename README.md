@@ -68,6 +68,7 @@ stopped, rather than erroring or creating a second one.
 | `list` | `--json`, `--all-repos`, `--no-gc` | Lists instances for the current repository, or every treehouse-managed repository with `--all-repos` (flagging any registry claim whose worktree is gone as `"stale": true`). |
 | `remove [name]` | `--force`, `--keep-volumes` | Stops the stack, removes it (and its volumes, unless `--keep-volumes`), removes the worktree, and releases its port claim. Refuses a dirty worktree, and refuses to prompt outside a terminal, without `--force`. Omit `name` to remove the instance containing the current directory. |
 | `path <name>` | | Prints an instance's worktree directory, for `cd "$(treehouse path foo)"`. |
+| `urls [name]` | `--json` | Prints an instance's local URLs: the manifest's `urls` entries with that instance's ports substituted in. Omit `name` to use the instance containing the current directory. |
 | `up` | | Brings the compose stack up; instance-scoped inside an instance (re-verifying its port block first), plain passthrough in a main repository. |
 | `down` | `--volumes` | Brings the compose stack down. Keeps named volumes, so the instance's data survives; `--volumes` removes them too. |
 | `restart` | | Restarts the compose stack. |

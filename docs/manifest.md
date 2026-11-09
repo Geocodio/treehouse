@@ -199,7 +199,8 @@ validation rejects an absolute path or a `../`-prefixed one outright.
 ### `urls`
 
 A list of human-facing summary lines printed after `create`/`provision`
-finish (and returned in `create --json`'s `"urls"` field), each with a
+finish (returned in `create --json`'s `"urls"` field, and reprinted any
+time by `treehouse urls`), each with a
 `name` and a `url` template. Every `{ENV_VAR}` placeholder in `url` is
 substituted with that instance's actual port number for the matching
 `ports.env` (or `ports.aliases`) variable:

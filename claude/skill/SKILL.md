@@ -64,6 +64,9 @@ run `treehouse provision --retry`.
   `--env-file`/`--project-name` already injected for this instance, for
   anything `exec` doesn't cover (`treehouse compose logs -f web`,
   `treehouse compose ps`).
+- `treehouse urls [--json]` — reprint the instance's local URLs (the same
+  rendered `urls` that `create` returned), e.g. when you need the app URL
+  later in a session.
 - `treehouse up` / `down` / `restart` / `status` — context-aware compose
   wrappers; run from inside the instance so they apply to its stack, not
   the main repository's.
